@@ -1,8 +1,9 @@
-use std::cmp::Ordering;
+use core::f32;
+use std::{cmp::Ordering, vec};
 
 use macroquad::prelude::*;
 
-use crate::road::{self, RoadGrid};
+use crate::road::{RoadGrid};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Destination {
@@ -18,17 +19,19 @@ pub enum CarState {
     IDLE,
     MovingToDestination(Destination),
     LookingForRoad(RoadGrid),
+    MovingOnRoad()
 }
 
 pub struct Car {
 
-    position: Vec2,
+    pub position: Vec2,
     speed: f32,
     rotation: f32,
 
-
+    // State Machine
     state: CarState,
     color: Color,
+
 
 
     // Vector Algebra Fields
@@ -46,7 +49,7 @@ impl Car {
         }
     }
 
-    pub fn change_state(&mut self, state: CarState) {
+    fn change_state(&mut self, state: CarState) {
         match state {
             CarState::IDLE => {
                 self.state = CarState::IDLE;
@@ -58,6 +61,9 @@ impl Car {
             CarState::LookingForRoad(road_grid) => {
                 self.state = CarState::LookingForRoad(road_grid);
             },
+            CarState::MovingOnRoad() => {
+
+            }
         }
     }
 
@@ -67,39 +73,47 @@ impl Car {
 
         match &self.state {
 
-            CarState::IDLE => {
-            },
+            CarState::IDLE => {},
 
             CarState::MovingToDestination(destination) => {
 
-                let eps: f32 = 0.8;
-                let angle_eps: f32 = 0.01;
-                let angle = Vec2::from_angle(self.rotation).angle_between(destination.position);
-                println!("Angle between car and next road: {}", angle);
-                let facing_target=  angle >= 0.0 && angle <= angle_eps || angle < 0.0 && angle > -angle_eps ;
+                let eps: f32 = 1.0;
+                let angle_eps: f32 = 0.1;
 
-                let done = arrived(&self.position, &destination.position, eps);
+                let to_target = destination.position - self.position;
+                let distance_to_target = to_target.length();
 
-                if done {
+                if distance_to_target < eps {
                     self.position = destination.position;
                     self.change_state(CarState::IDLE);
                 }
+
+                let angle_to_target = to_target.to_angle();
+
+                let mut err = angle_to_target - self.rotation;
+
+                while err > std::f32::consts::PI { err -= 2.0 * f32::consts::PI; }
+                while err < -std::f32::consts::PI { err += 2.0 * f32::consts::PI; }
+
+                let facing_target= err.abs() < angle_eps;
+
+            
+                if !facing_target { self.rotate_car(if err > 0.1 {1.0} else {-1.0}); }
+
                 
-                else {
-                    if !facing_target {
+                let max_speed: f32 = 20.0;
+                let slow_radius = 10.0;
 
-                        if angle > 0.0 {
-                            self.rotate_car(1.0);
-                        }
-                        else {
-                            self.rotate_car(-1.0);
-                        }
 
-                    }
+                let scaled_angle = (err.cos() + 1.0) * 0.5;
+                let scaled_distance = (distance_to_target / slow_radius).clamp(0.0, 1.0);
 
-                    let amt = self.position.to_angle()
-                    self.move_car(20.0, 0.0);   
-                }
+                println!("Scaled Angle: {}\nScaled Distance: {}", scaled_angle, scaled_distance);
+
+                let desired_speed: f32 = max_speed * scaled_distance * scaled_angle;
+
+                self.speed = desired_speed;
+                self.move_car();
 
             },
             CarState::LookingForRoad(road_grid) => {
@@ -119,6 +133,9 @@ impl Car {
                 }
             }
 
+            CarState::MovingOnRoad() => {
+
+            }
         }
 
 
@@ -128,9 +145,13 @@ impl Car {
         self.rotation += amount * get_frame_time()
     }
 
-    fn move_car(&mut self, amount_x: f32, amount_y: f32) {
-        self.position.x += amount_x * get_frame_time();
-        self.position.y += amount_y * get_frame_time();
+    fn move_car(&mut self) {
+        
+        let dt = get_frame_time();
+        let dir = Vec2::from_angle(self.rotation);
+
+        self.position += dir * self.speed * dt;
+        
         
         println!("{}", self.position);
     }

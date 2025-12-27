@@ -1,0 +1,48 @@
+warning: unused import: `self`
+ --> traffic/src/cars.rs:6:19
+  |
+6 | use crate::road::{self, RoadGrid};
+  |                   ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `draw_rectangle`
+ --> traffic/src/road.rs:1:96
+  |
+1 | use macroquad::{color::{BLACK, PINK, RED, WHITE}, math::Vec2, shapes::{draw_circle, draw_line, draw_rectangle}, window::{screen_height, screen_width}};
+  |                                                                                                ^^^^^^^^^^^^^^
+
+warning: unused imports: `RngCore`, `random_range`, and `random`
+ --> traffic/src/road.rs:2:17
+  |
+2 | use rand::{Rng, RngCore, random, random_range, rng};
+  |                 ^^^^^^^  ^^^^^^  ^^^^^^^^^^^^
+
+warning: field `cars` is never read
+  --> traffic/src/cars.rs:14:5
+   |
+13 | pub struct CarWorld {
+   |            -------- field in this struct
+14 |     cars: Vec<Car>
+   |     ^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `arrived` is never used
+   --> traffic/src/cars.rs:158:4
+    |
+158 | fn arrived(v1: &Vec2, v2: &Vec2, eps: f32) -> bool {
+    |    ^^^^^^^
+
+warning: `traffic` (lib) generated 5 warnings (run `cargo fix --lib -p traffic` to apply 3 suggestions)
+warning: unused imports: `CarState`, `Destination`, `draw_road`, and `self`
+ --> main/src/main.rs:4:27
+  |
+4 | use traffic::{cars::{Car, CarState, Destination, draw_car}, road::{self, Road, RoadGrid, draw_road, draw_road_grid}};
+  |                           ^^^^^^^^  ^^^^^^^^^^^                    ^^^^                  ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `main` (bin "main") generated 1 warning (run `cargo fix --bin "main"` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running `/home/dangermos/random_programming/target/debug/main`

@@ -79,7 +79,7 @@ impl Road {
 
 pub fn draw_road(road: &Road, debug: bool) {
     
-    const THICKNESS: f32 = 30.0; 
+    const THICKNESS: f32 = 5.0; 
 
 
 
@@ -92,10 +92,10 @@ pub fn draw_road(road: &Road, debug: bool) {
     for i in 0..road.points.len() - 1 {
         let curr = road.points[i];
         let next = road.points[i + 1];
-        if debug {draw_circle(curr.x, curr.y, 0.1, RED);}
+        if debug {draw_circle(curr.x, curr.y, 1.0, RED);}
         draw_line(curr.x, curr.y, next.x, next.y, THICKNESS, WHITE);
 
-        if i % 4 == 0 {
+        if i + 1 % 4 == 0 {
             draw_line(curr.x, curr.y, next.x, next.y, THICKNESS / 4.0, BLACK);
 
         }
@@ -104,7 +104,7 @@ pub fn draw_road(road: &Road, debug: bool) {
     }
 
 
-    if debug {draw_circle(road.points.last().unwrap().x, road.points.last().unwrap().y, 3.0, PINK);}
+    if debug {draw_circle(road.points.last().unwrap().x, road.points.last().unwrap().y, 1.0, PINK);}
 
 }
 
