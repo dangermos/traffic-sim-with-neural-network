@@ -1,52 +1,50 @@
-use std::vec;
+use macroquad::prelude::*;
+use traffic::{cars::{Car, draw_car}, road::{Road, RoadGrid, draw_road_grid}};
 
-use macroquad::{miniquad::PassAction, prelude::{scene::camera_pos, *}};
-use traffic::{cars::{Car, CarState, Destination, draw_car}, road::{self, Road, RoadGrid, draw_road, draw_road_grid}};
+const BASE_ZOOM: f32 = 0.001;
 
 
 fn handle_input(camera: &mut Camera2D) {
 
-    let c= if is_key_down(KeyCode::LeftShift) {20.0} else {10.0};
-    let mut scale: f32 = c / (camera.zoom.x * 10.0);
-    println!("Camera Zoom: {}\nAttempted Scale: {}", camera.zoom, scale);
+    let dt = get_frame_time();
+    let pan_speed = if is_key_down(KeyCode::LeftShift) { 2.0 } else { 1.0 };
+    let pan_step = pan_speed * dt / camera.zoom.x.abs().max(0.0005);
 
     if is_key_down(KeyCode::W) {
-        camera.target.y -= scale * get_frame_time();
+        camera.target.y -= pan_step;
     }
     if is_key_down(KeyCode::A) {
-        camera.target.x -= scale * get_frame_time();
+        camera.target.x -= pan_step;
     }
     if is_key_down(KeyCode::S) {
-        camera.target.y += scale * get_frame_time();
+        camera.target.y += pan_step;
     }
     if is_key_down(KeyCode::D) {
-        camera.target.x += scale * get_frame_time();
+        camera.target.x += pan_step;
     }
 
-    if is_key_down(KeyCode::R) {
-        set_default_camera();
+    if is_key_pressed(KeyCode::R) {
+        camera.target = vec2(screen_width() * 0.5, screen_height() * 0.5);
+        camera.zoom = vec2(BASE_ZOOM, BASE_ZOOM);
     }
 
-    if is_key_pressed(KeyCode::Equal) {
-        camera.zoom.x += 0.001;
-        camera.zoom.y += 0.001;
-        if camera.zoom.x < 0.0001 {
-            camera.zoom.x += 0.0005;
-            camera.zoom.y += 0.0005;
-        }
+    if is_key_down(KeyCode::Equal) {
+        let factor = 1.05;
+        camera.zoom.x = (camera.zoom.x * factor).clamp(0.0001, 0.01);
+        camera.zoom.y = (camera.zoom.y * factor).clamp(0.0001, 0.01);
     }
-    if is_key_pressed(KeyCode::Minus) {
-        camera.zoom.x -= 0.001;
-        camera.zoom.y -= 0.001;
-
-        if camera.zoom.x < 0.0001 {
-            camera.zoom.x -= 0.0005;
-            camera.zoom.y -= 0.0005;
-
-        }    
+    if is_key_down(KeyCode::Minus) {
+        let factor = 0.95;
+        camera.zoom.x = (camera.zoom.x * factor).clamp(0.0001, 0.01);
+        camera.zoom.y = (camera.zoom.y * factor).clamp(0.0001, 0.01);
     }
 
-    println!("Cam Position: {}", camera.target);
+    let scroll = mouse_wheel().1;
+    if scroll.abs() > f32::EPSILON {
+        let factor = 1.0 + scroll * 0.05;
+        camera.zoom.x = (camera.zoom.x * factor).clamp(0.0001, 0.01);
+        camera.zoom.y = (camera.zoom.y * factor).clamp(0.0001, 0.01);
+    }
 
 }
 
@@ -58,6 +56,7 @@ async fn main() {
     let x = screen_width();
     let y = screen_height();
     let (center_x, center_y) = (x / 2.0, y / 2.0);
+    let base_zoom = vec2(BASE_ZOOM, BASE_ZOOM);
     
     
     // Road and Car initialization
@@ -66,13 +65,12 @@ async fn main() {
     
     let mut car1 = Car::new(
         Vec2::new(center_x, center_y + 200.0),
-        0.0, 
-        PINK,
-        road_grid.clone());
+        0.0,
+        PINK);
         
     let mut camera = Camera2D {
         target: Vec2 { x: center_x, y: center_y },
-        zoom: Vec2 { x: 0.001, y: 0.001 },
+        zoom: base_zoom,
         ..Default::default()
     };
     //set_default_camera();
@@ -80,14 +78,14 @@ async fn main() {
     // Update Loop
     loop {
 
+        handle_input(&mut camera);
+        set_camera(&camera);
         clear_background(BEIGE);
-        car1.update();
-        
+        car1.update(&road_grid);
+
         draw_road_grid(&road_grid, true);
         draw_car(&car1, true);
 
-        handle_input(&mut camera);
-        set_camera(&camera);
         next_frame().await
 
 

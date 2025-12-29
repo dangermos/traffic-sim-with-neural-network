@@ -1,5 +1,5 @@
-use macroquad::{color::{BLACK, PINK, RED, WHITE}, math::Vec2, shapes::{draw_circle, draw_line, draw_rectangle}, window::{screen_height, screen_width}};
-use rand::{Rng, RngCore, random, random_range, rng};
+use macroquad::{color::{BLACK, Color, PINK, RED, WHITE}, math::Vec2, shapes::{draw_circle, draw_line, draw_rectangle}, window::{screen_height, screen_width}};
+use rand::{Rng, rng};
 
 
 #[derive(Clone, Debug)]
@@ -80,11 +80,11 @@ impl Road {
 pub fn draw_road(road: &Road, debug: bool) {
     
     const THICKNESS: f32 = 5.0; 
-
-
+    const ROAD_COLOR: Color = Color::from_rgba(255, 255, 255, 50);
 
     let (_start, _end) = (road.points.first().expect("Road Points not Initialized Correctly"),
                                         road.points.last().expect("Road Points not Initialized Correctly"));
+                        
 
 
     // Draw Loop
@@ -93,11 +93,11 @@ pub fn draw_road(road: &Road, debug: bool) {
         let curr = road.points[i];
         let next = road.points[i + 1];
         if debug {draw_circle(curr.x, curr.y, 1.0, RED);}
-        draw_line(curr.x, curr.y, next.x, next.y, THICKNESS, WHITE);
 
-        if i + 1 % 4 == 0 {
+        draw_line(curr.x, curr.y, next.x, next.y, THICKNESS, ROAD_COLOR);
+
+        if (i + 1) % 2 == 0 {
             draw_line(curr.x, curr.y, next.x, next.y, THICKNESS / 4.0, BLACK);
-
         }
 
 

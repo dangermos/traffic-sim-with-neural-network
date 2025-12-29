@@ -18,8 +18,8 @@ pub struct CarWorld {
 pub enum CarState {
     IDLE,
     MovingToDestination(Destination),
-    LookingForRoad(RoadGrid),
-    MovingOnRoad()
+    LookingForRoad,
+    FollowRoad
 }
 
 pub struct Car {
@@ -42,10 +42,10 @@ pub struct Car {
 
 impl Car {
     
-    pub fn new(position: Vec2, speed: f32, color: Color, road_grid: RoadGrid) -> Self {
+    pub fn new(position: Vec2, speed: f32, color: Color) -> Self {
         Self {
             position, speed, color, rotation: 0.0,
-            state: CarState::LookingForRoad(road_grid),
+            state: CarState::LookingForRoad,
         }
     }
 
@@ -58,16 +58,16 @@ impl Car {
             CarState::MovingToDestination(destination) => {
                 self.state = CarState::MovingToDestination(destination);
             },
-            CarState::LookingForRoad(road_grid) => {
-                self.state = CarState::LookingForRoad(road_grid);
+            CarState::LookingForRoad => {
+                self.state = CarState::LookingForRoad;
             },
-            CarState::MovingOnRoad() => {
+            CarState::FollowRoad => {
 
             }
         }
     }
 
-    pub fn update(&mut self) {
+    pub fn update(&mut self, road_grid: &RoadGrid) {
 
         println!("State is {:?}", self.state);
 
@@ -116,7 +116,7 @@ impl Car {
                 self.move_car();
 
             },
-            CarState::LookingForRoad(road_grid) => {
+            CarState::LookingForRoad => {
 
                 if let Some(closest) = road_grid.roads.iter().min_by(|a, b| {
                     let da = self.position.distance(*a.get_first_point());
@@ -133,7 +133,7 @@ impl Car {
                 }
             }
 
-            CarState::MovingOnRoad() => {
+            CarState::FollowRoad => {
 
             }
         }
