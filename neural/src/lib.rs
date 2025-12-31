@@ -11,11 +11,11 @@ pub struct Network {
 
 impl Network {
 
-    pub fn new_random(layers: &[LayerTopology]) -> Self {
+    pub fn new_random<R: Rng + ?Sized>(layers: &[LayerTopology], rng: &mut R) -> Self {
         assert!(layers.len() > 1);
         let layers = layers
             .windows(2)
-            .map(|layers| Layer::new_random(layers[0].neurons, layers[1].neurons))
+            .map(|layers| Layer::new_random(layers[0].neurons, layers[1].neurons, Activation::ReLU, rng))
             .collect();
 
         Self { layers }
@@ -30,23 +30,24 @@ impl Network {
 }
 
 pub struct Layer {
-    neurons: Vec<Neuron>
+    neurons: Vec<Neuron>,
+    activation_function: Activation,
 }
 
 impl Layer {
 
-    fn new_random(input_size: usize, output_size: usize) -> Self {
+    fn new_random<R: Rng + ?Sized>(input_size: usize, output_size: usize, activation_function: Activation, rng: &mut R) -> Self {
         let neurons = (0..output_size)
-            .map(|_| Neuron::new_random(input_size))
+            .map(|_| Neuron::new_random(input_size, rng))
             .collect();
     
-        Self { neurons }
+        Self { neurons, activation_function }
     }
 
     fn propagate(&self, mut inputs: Vec<f32>) -> Vec<f32> {
         self.neurons
             .iter()
-            .map(|x| x.propagate(&inputs, Activation::ReLU))
+            .map(|x| x.propagate(&inputs, self.activation_function))
             .collect() 
     }
 
@@ -70,9 +71,7 @@ impl Neuron {
         return activation_function.apply(self.bias + output);
     }
 
-    fn new_random(input_size: usize) -> Self {
-
-        let mut rng = rand::rng();
+    fn new_random<R: Rng + ?Sized>(input_size: usize, rng: &mut R) -> Self {
 
         let bias = rng.random_range(-1.0..1.0);
 
@@ -105,7 +104,7 @@ impl Activation {
             Activation::Sigmoid => 1.0 / (1.0 + (-x).exp()),
             Activation::Tanh => x.tanh(),
             Activation::Softsign => x / (1.0 + x.abs()),
-            Activation::Softplus => (1.0 + x.exp()).log(10.0),
+            Activation::Softplus => (1.0 + x.exp()).log(2.0),
         }
     }
 }

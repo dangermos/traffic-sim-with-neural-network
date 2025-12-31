@@ -1,4 +1,4 @@
-use macroquad::{color::{BLACK, Color, PINK, RED, WHITE}, math::Vec2, shapes::{draw_circle, draw_line, draw_rectangle}, window::{screen_height, screen_width}};
+use macroquad::{color::{BLACK, Color, PINK, RED}, math::Vec2, shapes::{draw_circle, draw_line}, window::{screen_height, screen_width}};
 use rand::{Rng, rng};
 
 
@@ -18,6 +18,12 @@ impl RoadGrid {
         Self {
             roads 
         }
+    }
+
+    pub fn draw_roads(&self, debug: bool) {
+        self.roads.iter().for_each(
+            |x| draw_road(x, debug)
+        );
     }
 }
 
@@ -106,12 +112,6 @@ pub fn draw_road(road: &Road, debug: bool) {
 
     if debug {draw_circle(road.points.last().unwrap().x, road.points.last().unwrap().y, 1.0, PINK);}
 
-}
-
-pub fn draw_road_grid(grid: &RoadGrid, debug: bool) {
-    for road in grid.roads.iter() {
-        draw_road(road, debug);
-    }
 }
 
 pub fn generate_road_grid(roads: i32) -> RoadGrid {

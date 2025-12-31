@@ -1,5 +1,5 @@
 use core::f32;
-use std::{cmp::Ordering, vec};
+use std::cmp::Ordering;
 
 use macroquad::prelude::*;
 
@@ -11,7 +11,20 @@ pub struct Destination {
 }
 
 pub struct CarWorld {
-    cars: Vec<Car>
+    pub cars: Vec<Car>
+}
+
+impl CarWorld {
+
+    pub fn new(cars: Vec<Car>) -> Self {
+        Self { cars }
+    }
+
+    pub fn draw_cars(&self, debug: bool) {
+        self.cars.iter().for_each(
+            |x| draw_car(x, debug)
+        );
+    }
 }
 
 #[derive(Debug)]
@@ -19,7 +32,8 @@ pub enum CarState {
     IDLE,
     MovingToDestination(Destination),
     LookingForRoad,
-    FollowRoad
+    FollowRoad,
+    UserControlled(Destination),
 }
 
 pub struct Car {
@@ -27,10 +41,12 @@ pub struct Car {
     pub position: Vec2,
     speed: f32,
     rotation: f32,
+    id: u16,
 
     // State Machine
     state: CarState,
     color: Color,
+    destination: Option<Destination>,
 
 
 
@@ -42,14 +58,19 @@ pub struct Car {
 
 impl Car {
     
-    pub fn new(position: Vec2, speed: f32, color: Color) -> Self {
+    pub fn new(position: Vec2, speed: f32, color: Color, id: u16) -> Self {
         Self {
-            position, speed, color, rotation: 0.0,
+            position, speed, color, rotation: 0.0, id,
             state: CarState::LookingForRoad,
+            destination: None,
         }
     }
 
-    fn change_state(&mut self, state: CarState) {
+    pub fn get_id(&self) -> u16 {
+        self.id
+    }
+
+    pub fn change_state(&mut self, state: CarState) {
         match state {
             CarState::IDLE => {
                 self.state = CarState::IDLE;
@@ -57,19 +78,24 @@ impl Car {
 
             CarState::MovingToDestination(destination) => {
                 self.state = CarState::MovingToDestination(destination);
+                self.destination = Some(destination);
             },
             CarState::LookingForRoad => {
                 self.state = CarState::LookingForRoad;
             },
             CarState::FollowRoad => {
-
+                self.state = CarState::FollowRoad;
+            }
+            CarState::UserControlled(destination) => {
+                self.state = CarState::UserControlled(destination);
+                self.destination = Some(destination);
             }
         }
     }
 
-    pub fn update(&mut self, road_grid: &RoadGrid) {
+    pub fn update(&mut self, road_grid: &RoadGrid, debug: bool) {
 
-        println!("State is {:?}", self.state);
+        if debug {println!("State is {:?}", self.state);}
 
         match &self.state {
 
@@ -113,7 +139,7 @@ impl Car {
                 let desired_speed: f32 = max_speed * scaled_distance * scaled_angle;
 
                 self.speed = desired_speed;
-                self.move_car();
+                self.move_car(debug);
 
             },
             CarState::LookingForRoad => {
@@ -125,19 +151,40 @@ impl Car {
                 }) {
                     let p = closest.get_first_point();
                     println!("Closest road starts at ({:.2}, {:.2})", p.x, p.y);
-
-                    self.change_state(CarState::MovingToDestination(Destination { position: Vec2::new(p.x, p.y) }));
+                    let destination = Destination { position: Vec2::new(p.x, p.y) };
+                    self.destination = Some(destination);
+                    self.change_state(CarState::MovingToDestination(destination));
                 }
                 else {
                     println!("No Roads found on Grid.");
                 }
             }
 
-            CarState::FollowRoad => {
+            CarState::FollowRoad => { //TODO Implement Follow Road
 
-            }
+            },
+            CarState::UserControlled(destination) => {
+                //let max_speed = 20.0;
+                let eps = 20.0;
+
+                let to_target = destination.position - self.position;
+                let distance_to_target = to_target.length();
+
+                if distance_to_target < eps {
+                    self.position = destination.position;
+                    self.change_state(CarState::IDLE);
+                }
+
+                self.move_car_manual(debug);
+
+                if debug {
+                    println!("Distance to Target {}", distance_to_target);
+                }
+
+
+            },
         }
-
+ 
 
     }
 
@@ -145,7 +192,7 @@ impl Car {
         self.rotation += amount * get_frame_time()
     }
 
-    fn move_car(&mut self) {
+    fn move_car(&mut self, debug: bool) {
         
         let dt = get_frame_time();
         let dir = Vec2::from_angle(self.rotation);
@@ -153,7 +200,37 @@ impl Car {
         self.position += dir * self.speed * dt;
         
         
-        println!("{}", self.position);
+        if debug {println!("{}", self.position);}
+    }
+
+    fn move_car_manual(&mut self, debug: bool) {
+        let dt = get_frame_time();
+        let dir = Vec2::from_angle(self.rotation);
+
+        const MOVEMENT: f32 = 50.0;
+        const DELTA_ROTATION: f32 = 1.0;
+
+        if is_key_down(KeyCode::Left) {
+            self.rotation -= DELTA_ROTATION * dt
+        }
+        if is_key_down(KeyCode::Right) {
+            self.rotation += DELTA_ROTATION * dt;
+        }
+        if is_key_down(KeyCode::Up) {
+            self.position += dir * MOVEMENT * dt;
+        }
+        if is_key_down(KeyCode::Down) {
+            self.position -= dir * MOVEMENT * dt;
+        }
+
+        if debug {
+            println!("Keys Pressed: {:#?}\nPosition: {}", get_keys_down(), self.position);
+        }
+
+    }
+
+    pub fn get_destination(&self) -> Option<Destination> {
+        self.destination
     }
 
 
@@ -209,7 +286,10 @@ pub fn draw_car(car: &Car, debug: bool) {
     let v3 = car.position + rotate(a3, car.rotation);
 
 
-    draw_triangle(v1, v2, v3, GOLD);    
+    draw_triangle(v1, v2, v3, BLACK);    
+
+    draw_text(&car.get_id().to_string(), car.position.x + dims.0 / 2.0, car.position.y, 30.0, GREEN);
+    draw_text(format!("{:.0}", &car.position).as_str(), car.position.x + dims.0 / 2.0, car.position.y + 20.0, 20.0, GREEN);
 
     }                     
 
