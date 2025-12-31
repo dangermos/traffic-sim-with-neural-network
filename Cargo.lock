@@ -177,6 +177,8 @@ name = "main"
 version = "0.1.0"
 dependencies = [
  "macroquad",
+ "neural",
+ "rand",
  "traffic",
 ]
 
@@ -346,6 +348,7 @@ name = "traffic"
 version = "0.1.0"
 dependencies = [
  "macroquad",
+ "neural",
  "rand",
 ]
 

@@ -1,15 +1,23 @@
 use rand::Rng;
+use std::fmt;
 
 #[derive(Debug)]
 pub struct LayerTopology {
     pub neurons: usize,
 }
 
+
 pub struct Network {
     layers: Vec<Layer>
 }
 
 impl Network {
+
+    pub fn new(layers: Vec<Layer>) -> Self {
+        Self {
+            layers
+        }
+    }
 
     pub fn new_random<R: Rng + ?Sized>(layers: &[LayerTopology], rng: &mut R) -> Self {
         assert!(layers.len() > 1);
@@ -28,7 +36,7 @@ impl Network {
             .fold(inputs, |inputs, layer| layer.propagate(inputs))
     }
 }
-
+#[derive(Debug)]
 pub struct Layer {
     neurons: Vec<Neuron>,
     activation_function: Activation,
@@ -36,7 +44,7 @@ pub struct Layer {
 
 impl Layer {
 
-    fn new_random<R: Rng + ?Sized>(input_size: usize, output_size: usize, activation_function: Activation, rng: &mut R) -> Self {
+    pub fn new_random<R: Rng + ?Sized>(input_size: usize, output_size: usize, activation_function: Activation, rng: &mut R) -> Self {
         let neurons = (0..output_size)
             .map(|_| Neuron::new_random(input_size, rng))
             .collect();
@@ -52,13 +60,17 @@ impl Layer {
     }
 
 }
-
+#[derive(Debug)]
+/// Neuron of a Neural Network.
+/// Bias is a single f32 while weights is a dynamic Vec of f32's.
+/// This is because a neuron gets a weight per input to the neuron. 
 pub struct Neuron {
-    weights: Vec<f32>,
+    weights: Vec<f32>, 
     bias: f32,
 }
 
 impl Neuron {
+
     fn propagate(&self, inputs: &Vec<f32>, activation_function: Activation) -> f32 {
         assert_eq!(inputs.len(), self.weights.len());
 
@@ -109,3 +121,113 @@ impl Activation {
     }
 }
 
+const FLOAT_PRECISION: usize = 4;
+
+fn write_f32(f: &mut fmt::Formatter<'_>, value: f32) -> fmt::Result {
+    write!(f, "{:.*}", FLOAT_PRECISION, value)
+}
+
+impl fmt::Display for LayerTopology {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "LayerTopology(neurons={})", self.neurons)
+    }
+}
+
+impl fmt::Display for Network {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Network(layers={})", self.layers.len())?;
+        for (index, layer) in self.layers.iter().enumerate() {
+            write!(f, "\n  [{}] ", index)?;
+            let layer_string = layer.to_string();
+            let mut lines = layer_string.lines();
+            if let Some(first_line) = lines.next() {
+                write!(f, "{}", first_line)?;
+            }
+            for line in lines {
+                write!(f, "\n  {}", line)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for Layer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let input_size = self.neurons.first().map(|neuron| neuron.weights.len()).unwrap_or(0);
+        write!(
+            f,
+            "Layer(inputs={}, outputs={}, activation={})",
+            input_size,
+            self.neurons.len(),
+            self.activation_function
+        )?;
+        for (index, neuron) in self.neurons.iter().enumerate() {
+            write!(f, "\n  [{}] {}", index, neuron)?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for Neuron {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Neuron(bias=")?;
+        write_f32(f, self.bias)?;
+        write!(f, ", weights=[")?;
+        for (index, weight) in self.weights.iter().enumerate() {
+            if index > 0 {
+                write!(f, ", ")?;
+            }
+            write_f32(f, *weight)?;
+        }
+        write!(f, "])")
+    }
+}
+
+impl fmt::Display for Activation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Activation::Linear => write!(f, "Linear"),
+            Activation::ReLU => write!(f, "ReLU"),
+            Activation::LeakyReLU(slope) => {
+                write!(f, "LeakyReLU(")?;
+                write_f32(f, *slope)?;
+                write!(f, ")")
+            }
+            Activation::Sigmoid => write!(f, "Sigmoid"),
+            Activation::Tanh => write!(f, "Tanh"),
+            Activation::Softsign => write!(f, "Softsign"),
+            Activation::Softplus => write!(f, "Softplus"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+
+    use super::*;
+
+    #[test]
+    fn test_new_network() {
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let layers = 
+        vec![
+            Layer::new_random(4, 4, Activation::Tanh, &mut rng),
+            Layer::new_random(4, 2, Activation::Tanh, &mut rng)
+        ];
+
+        let network = Network {layers};
+
+
+        let inputs: Vec<f32> = vec![0.0, 0.5, 3.2, 1.2];
+
+        network.propagate(inputs);
+
+        println!("Network: {}", network);
+
+        
+    }
+}
