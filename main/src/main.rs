@@ -1,14 +1,13 @@
 use macroquad::{prelude::*, rand, window};
 use neural::{Activation, Layer, Network};
-use ::rand::Rng;
-use traffic::{cars::{Car, CarWorld, Destination}, road::{Road, RoadGrid, generate_road_grid}};
+use traffic::{cars::CarWorld, road::{generate_road_grid}, simulation::Simulation};
 
 const BASE_ZOOM: f32 = 0.003;
 
 
 fn handle_input(camera: &mut Camera2D) {
 
-    let dt = get_frame_time();
+    let dt = 0.01;
     let pan_speed = if is_key_down(KeyCode::LeftShift) { 2.0 } else { 1.0 };
     let pan_step = pan_speed * dt / camera.zoom.x.abs().max(0.0005);
 
@@ -50,40 +49,6 @@ fn handle_input(camera: &mut Camera2D) {
 
 }
 
-
-struct Simulation {
-    cars: CarWorld,
-    roads: RoadGrid,
-}
-
-impl Simulation {
-
-    pub fn from_sim(sim: Self) -> Self {
-        Simulation { cars: sim.cars, roads: sim.roads }
-    }
-
-    pub fn draw_sim(&self, debug: bool) {
-        self.roads.draw_roads(debug);
-        self.cars.draw_cars(debug);
-
-        if debug {
-            self.cars.cars.iter().for_each(
-                |car| {
-                    let destination = car.get_destination().unwrap_or(Destination {position: Vec2::new(0.0, 0.0)});
-                    draw_circle(destination.position.x, destination.position.y, 10.0, PINK);
-                    draw_text(format!("Car {} {}", car.get_id(), destination.position).as_str(), destination.position.x, destination.position.y, 20.0, GREEN);
-                })
-            ;
-        }
-
-    }
-
-    pub fn update(&mut self, debug: bool) {
-        self.cars.cars.iter_mut().for_each(
-            |x| x.update(&self.roads, debug)
-        );
-    }
-}
 
 #[macroquad::main("Hello")]
 async fn main() {
@@ -139,18 +104,8 @@ async fn main() {
     };
 
 
-
-    let car_net = &sim.cars.cars[0].network;
-
-    let x = car_net.propagate(inputs);
-
-    println!("x: {:#?}", x);
-
-    println!("{}", car_net);
-
-    let mut i = 0;
-
     loop {
+
         handle_input(&mut camera);
         set_camera(&camera);
         clear_background(BEIGE);
@@ -160,9 +115,6 @@ async fn main() {
 
         next_frame().await; 
     }
-
-   
-
-        
+    
 } // End Simulation
     

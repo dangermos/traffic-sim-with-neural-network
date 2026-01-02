@@ -91,8 +91,6 @@ impl Road {
         }
         fin_vector.push(end.clone());
 
-        println!("Made Road with {} points", fin_vector.len());
-
         Road { points: fin_vector, id}
 
     }
@@ -112,7 +110,7 @@ impl Road {
 
 pub fn draw_road(road: &Road, debug: bool) {
     
-    const THICKNESS: f32 = 5.0; 
+    const THICKNESS: f32 = 60.0; 
     const ROAD_COLOR: Color = Color::from_rgba(255, 255, 255, 50);
 
     let (_start, _end) = (road.points.first().expect("Road Points not Initialized Correctly"),
@@ -157,17 +155,48 @@ pub fn generate_road_grid(roads: i32) -> RoadGrid {
     let mut i: i32 = 0;
 
     while i < roads {
+
         let rand_x1 = rng.random_range(0..max_x) as f32;
         let rand_y1 = rng.random_range(0..max_y) as f32;
         let rand_x2 = rng.random_range(0..max_x) as f32;
         let rand_y2 = rng.random_range(0..max_y) as f32;
+
+
+        let origin = Vec2::new(rand_x1, rand_y1);
+        let end = Vec2::new(rand_x2, rand_y2);
     
-        r.push(Road::new(Vec2::new(rand_x1, rand_y1), Vec2::new(rand_x2, rand_y2), i as u16));
+        r.push(Road::new(
+            origin, end,
+            i as u16));
         i+= 1;
     }
 
-    // Now lets connect them!
+    fn close(road1: &Road, road2: &Road) -> bool {
 
+        let eps = 5.0;
+
+        if ((road1.points.first().unwrap().x - road2.points.first().unwrap().x).abs() < eps) || 
+           ((road1.points.first().unwrap().y - road2.points.first().unwrap().y).abs() < eps) 
+           {
+            true
+        }
+        else {
+            false
+        }
+
+
+    }
+
+    let mut filtered: Vec<Road> = Vec::with_capacity(r.len());
+    for road in r.drain(..) {
+        if filtered.iter().any(|existing| close(existing, &road)) {
+            continue;
+        }
+        filtered.push(road);
+    }
+    r = filtered;
+    
+    // Now lets connect them!
     let mut temp = vec![];
 
     for x in r.windows(2) {
@@ -176,9 +205,6 @@ pub fn generate_road_grid(roads: i32) -> RoadGrid {
     }
 
     r.append(&mut temp);
-
-
-
 
     RoadGrid::new(r)
 

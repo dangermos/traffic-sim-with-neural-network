@@ -189,8 +189,6 @@ impl Car {
 
     pub fn update(&mut self, road_grid: &RoadGrid, debug: bool) {
 
-        if debug {println!("State is {:?}", self.state);}
-
         match &self.state {
 
             CarState::IDLE => {
@@ -232,8 +230,6 @@ impl Car {
                 let scaled_angle = (err.cos() + 1.0) * 0.5;
                 let scaled_distance = (distance_to_target / slow_radius).clamp(0.0, 1.0);
 
-                println!("Scaled Angle: {}\nScaled Distance: {}", scaled_angle, scaled_distance);
-
                 let desired_speed: f32 = max_speed * scaled_distance * scaled_angle;
 
                 self.speed = desired_speed;
@@ -262,6 +258,7 @@ impl Car {
             CarState::AIControlled(destination) => { //TODO Implement Follow Road
 
 
+
             },
 
             CarState::UserControlled(destination) => {
@@ -286,7 +283,7 @@ impl Car {
             },
             
             CarState::ReachedDestination => {
-                self.color.a = 0.0;
+                self.color.a = 0.2;
             }
         
         }
@@ -300,17 +297,17 @@ impl Car {
 
     fn move_car(&mut self, debug: bool) {
         
-        let dt = get_frame_time();
+        let dt = 0.01;
         let dir = Vec2::from_angle(self.rotation);
 
         self.position += dir * self.speed * dt;
         
         
-        if debug {println!("{}", self.position);}
+        //if debug {println!("{}", self.position);}
     }
 
     fn move_car_manual(&mut self, debug: bool) {
-        let dt = get_frame_time();
+        let dt = 0.01;
         let dir = Vec2::from_angle(self.rotation);
 
         const MOVEMENT: f32 = 50.0;
@@ -330,7 +327,7 @@ impl Car {
         }
 
         if debug {
-            println!("Keys Pressed: {:#?}\nPosition: {}", get_keys_down(), self.position);
+            ("Keys Pressed: {:#?}\nPosition: {}", get_keys_down(), self.position);
         }
 
     }
