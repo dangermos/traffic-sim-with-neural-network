@@ -6,16 +6,16 @@ pub struct LayerTopology {
     pub neurons: usize,
 }
 
-
+#[derive(Debug)]
 pub struct Network {
     layers: Vec<Layer>
 }
 
 impl Network {
 
-    pub fn new(layers: Vec<Layer>) -> Self {
+    pub fn new(layers: &Vec<Layer>) -> Self {
         Self {
-            layers
+            layers: layers.to_vec()
         }
     }
 
@@ -36,7 +36,14 @@ impl Network {
             .fold(inputs, |inputs, layer| layer.propagate(inputs))
     }
 }
-#[derive(Debug)]
+
+impl Clone for Network {
+    fn clone(&self) -> Self {
+        Self { layers: self.layers.clone() }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Layer {
     neurons: Vec<Neuron>,
     activation_function: Activation,
@@ -60,7 +67,7 @@ impl Layer {
     }
 
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// Neuron of a Neural Network.
 /// Bias is a single f32 while weights is a dynamic Vec of f32's.
 /// This is because a neuron gets a weight per input to the neuron. 

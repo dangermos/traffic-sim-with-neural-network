@@ -1,9 +1,9 @@
 use core::f32;
-use std::cmp::Ordering;
+use std::{cmp::Ordering, os::unix::net};
+use ::rand::Rng;
 
 use macroquad::prelude::*;
-use neural::Network;
-
+use neural::{Activation, Layer, Network};
 use crate::road::{RoadGrid};
 
 #[derive(Clone, Copy, Debug)]
@@ -19,6 +19,38 @@ impl CarWorld {
 
     pub fn new(cars: Vec<Car>) -> Self {
         Self { cars }
+    }
+
+    pub fn new_random(num_cars: i32) -> Self {
+
+        let (center_x, center_y) = (screen_width() / 2.0 , screen_height() / 2.0 );
+
+        let mut rng = ::rand::rng();
+        
+        let layers = vec![
+            Layer::new_random(4, 4, Activation::Tanh, &mut rng),
+            Layer::new_random(4, 2, Activation::Tanh, &mut rng)
+        ];
+
+        let networks: Vec<Network> = (0..num_cars).map(
+            |_| Network::new(&layers)
+        ).collect();
+
+
+        let cars: CarWorld = CarWorld::new((0..num_cars).into_iter().map(
+            |x | {
+                
+                let (r, g, b, _a): (u8, u8, u8, u8) = rng.random(); 
+                
+                Car::new(
+                Vec2::new(center_x + (rng.random_range(0..100)) as f32, center_y + (rng.random_range(0..100)) as f32),
+                Color::from_rgba(r, g, b, 255),
+                networks[x as usize].clone(),
+                x as u16
+                )}
+        ).collect());
+
+        cars
     }
 
     pub fn draw_cars(&self, debug: bool) {
@@ -62,9 +94,9 @@ pub struct Car {
 
 impl Car {
     
-    pub fn new(position: Vec2, speed: f32, color: Color, network: Network, id: u16) -> Self {
+    pub fn new(position: Vec2, color: Color, network: Network, id: u16) -> Self {
         Self {
-            position, speed, color, rotation: 0.0, id,
+            position, speed: 0.0, color, rotation: 0.0, id,
             state: CarState::LookingForRoad,
             network,
             destination: None,
@@ -105,7 +137,10 @@ impl Car {
 
         match &self.state {
 
-            CarState::IDLE => {},
+            CarState::IDLE => { // If this was reached, a destination was arrived at. The default behavior is to assign another destination. 
+
+
+            },
 
             CarState::MovingToDestinationAuto(destination) => {
 
@@ -115,8 +150,9 @@ impl Car {
                 let to_target = destination.position - self.position;
                 let distance_to_target = to_target.length();
 
-                if distance_to_target < eps {
+                if distance_to_target < eps { // Arrived at Destination
                     self.position = destination.position;
+                    self.destination = None;
                     self.change_state(CarState::IDLE);
                 }
 
@@ -152,7 +188,7 @@ impl Car {
 
                 if let Some(closest) = road_grid.roads.iter().min_by(|a, b| {
                     let da = self.position.distance(*a.get_first_point());
-                    let db = self.position.distance(*b.get_first_point());
+                    let db = self.position.distance(*b.get_first_point( ));
                     da.partial_cmp(&db).unwrap_or(Ordering::Equal)
                 }) {
                     let p = closest.get_first_point();
@@ -167,6 +203,7 @@ impl Car {
             }
 
             CarState::AIControlled(destination) => { //TODO Implement Follow Road
+
 
             },
             CarState::UserControlled(destination) => {

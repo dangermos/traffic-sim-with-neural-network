@@ -1,6 +1,8 @@
 use macroquad::{color::{BLACK, Color, PINK, RED}, math::Vec2, shapes::{draw_circle, draw_line}, window::{screen_height, screen_width}};
 use rand::{Rng, rng};
 
+use crate::cars::Destination;
+
 
 #[derive(Clone, Debug)]
 pub struct Road {
@@ -10,12 +12,19 @@ pub struct Road {
 
 #[derive(Clone, Debug)]
 pub struct RoadGrid {
-    pub roads: Vec<Road>
+    pub roads: Vec<Road>,
+    destinations: Vec<Destination>
 }
 
 impl RoadGrid {
     pub fn new(roads: Vec<Road>) -> Self {
+
+        let destinations = roads.iter().map(
+            |x| Destination {position: *x.get_first_point()}
+        ).collect::<Vec<Destination>>();
+
         Self {
+            destinations,
             roads 
         }
     }
@@ -24,6 +33,10 @@ impl RoadGrid {
         self.roads.iter().for_each(
             |x| draw_road(x, debug)
         );
+    }
+
+    pub fn get_destinations(&self) -> &Vec<Destination> {
+        &self.destinations
     }
 }
 
@@ -36,7 +49,7 @@ impl Road {
 
         let mut rng = rand::rng();
 
-        let deviation: f32 = rng.random_range(5..50) as f32;
+        let deviation: f32 = rng.random_range(5..25) as f32;
 
         let direction_vector = end - origin;
 
@@ -98,19 +111,20 @@ pub fn draw_road(road: &Road, debug: bool) {
     for i in 0..road.points.len() - 1 {
         let curr = road.points[i];
         let next = road.points[i + 1];
-        if debug {draw_circle(curr.x, curr.y, 1.0, RED);}
 
         draw_line(curr.x, curr.y, next.x, next.y, THICKNESS, ROAD_COLOR);
 
-        if (i + 1) % 2 == 0 {
-            draw_line(curr.x, curr.y, next.x, next.y, THICKNESS / 4.0, BLACK);
+         
+        if debug {
+            draw_circle(curr.x, curr.y, 1.0, RED);
+            draw_circle(road.points.last().unwrap().x, road.points.last().unwrap().y, 1.0, PINK);
+            if (i + 1) % 2 == 0 {
+                draw_line(curr.x, curr.y, next.x, next.y, THICKNESS / 4.0, BLACK);
+            }
         }
 
 
     }
-
-
-    if debug {draw_circle(road.points.last().unwrap().x, road.points.last().unwrap().y, 1.0, PINK);}
 
 }
 
@@ -124,17 +138,34 @@ pub fn generate_road_grid(roads: i32) -> RoadGrid {
 
     let mut r: Vec<Road> = vec![];
 
-    for i in 0..roads {
+    // Generates (roads) amount of random roads
+    let mut i: i32 = 0;
+
+    while i < roads {
         let rand_x1 = rng.random_range(0..max_x) as f32;
         let rand_y1 = rng.random_range(0..max_y) as f32;
         let rand_x2 = rng.random_range(0..max_x) as f32;
         let rand_y2 = rng.random_range(0..max_y) as f32;
     
         r.push(Road::new(Vec2::new(rand_x1, rand_y1), Vec2::new(rand_x2, rand_y2), i as u16));
+        i+= 1;
     }
 
+    // Now lets connect them!
 
-    RoadGrid { roads: r }
+    let mut temp = vec![];
+
+    for x in r.windows(2) {
+        temp.push(Road::new(*x[0].points.last().unwrap(), *x[1].get_first_point(), i as u16));
+        i += 1;
+    }
+
+    r.append(&mut temp);
+
+
+
+
+    RoadGrid::new(r)
 
 
 
