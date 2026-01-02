@@ -103,6 +103,9 @@ dependencies = [
 [[package]]
 name = "genetics"
 version = "0.1.0"
+dependencies = [
+ "traffic",
+]
 
 [[package]]
 name = "getrandom"

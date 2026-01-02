@@ -1,10 +1,10 @@
 use core::f32;
-use std::{cmp::Ordering, os::unix::net};
+use std::{cmp::Ordering};
 use ::rand::Rng;
 
 use macroquad::prelude::*;
 use neural::{Activation, Layer, Network};
-use crate::road::{RoadGrid};
+use crate::road::{self, RoadGrid};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Destination {
@@ -21,9 +21,7 @@ impl CarWorld {
         Self { cars }
     }
 
-    pub fn new_random(num_cars: i32) -> Self {
-
-        let (center_x, center_y) = (screen_width() / 2.0 , screen_height() / 2.0 );
+    pub fn new_random(num_cars: i32, road_grid: &RoadGrid) -> Self {
 
         let mut rng = ::rand::rng();
         
@@ -38,15 +36,14 @@ impl CarWorld {
 
 
         let cars: CarWorld = CarWorld::new((0..num_cars).into_iter().map(
-            |x | {
-                
-                let (r, g, b, _a): (u8, u8, u8, u8) = rng.random(); 
-                
-                Car::new(
-                Vec2::new(center_x + (rng.random_range(0..100)) as f32, center_y + (rng.random_range(0..100)) as f32),
-                Color::from_rgba(r, g, b, 255),
-                networks[x as usize].clone(),
-                x as u16
+            |x | { 
+                let (r, g, b, _a): (u8, u8, u8, u8) = rng.random();  
+                Car::new_on_road(
+                    road_grid, 
+            (x % (road_grid.roads.len() + 1) as i32 ) as u16,
+                    Color::from_rgba(r, g, b, 255),
+            networks[x as usize].clone(),
+            x as u16
                 )}
         ).collect());
 
@@ -67,6 +64,7 @@ pub enum CarState {
     LookingForRoad,
     UserControlled(Destination),
     AIControlled(Destination),
+    ReachedDestination,
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +80,17 @@ pub struct Car {
     color: Color,
     destination: Option<Destination>,
 
+    // Sensor Fields
+
+    /// This measures how far off the road the car is. 
+    off_roadness: f32,
+
+    /// This measures how obstructed the car is, as in how 'clear' the front of the car is using a collection of rays
+    obstruction_score: f32,
+
+    /// This measures the distance of the current car to it's destination
+    distance_to_destination: f32,
+
 
 
     // Artificial Neural Network Fields
@@ -91,16 +100,58 @@ pub struct Car {
 
 }
 
+impl Default for Car {
+    fn default() -> Self {
+        Self { 
+            position: Vec2 { x: 0.0, y: 0.0 }, 
+            speed: 0.0, 
+            rotation: 0.0, 
+            id: 0, 
+            state: CarState::IDLE, 
+            color: WHITE, 
+            destination: None, 
+            off_roadness: 0.0, 
+            obstruction_score: 0.0, 
+            distance_to_destination: 0.0, 
+            network: Network::new(&vec![])}
+    }
+}
+
 
 impl Car {
     
-    pub fn new(position: Vec2, color: Color, network: Network, id: u16) -> Self {
-        Self {
-            position, speed: 0.0, color, rotation: 0.0, id,
-            state: CarState::LookingForRoad,
-            network,
-            destination: None,
+    pub fn new(position: Vec2, color: Color, network: Network, car_id: u16) -> Self {
+        
+        Self { position, id: car_id, color, state: CarState::LookingForRoad, network,
+            ..Default::default()
         }
+    }
+
+    pub fn new_on_road(road_grid: &RoadGrid, road_id: u16, color: Color, network: Network, car_id: u16) -> Self {
+
+        let position = *road_grid[road_id].get_first_point();
+        let id = car_id;
+
+
+        let mut rng = ::rand::rng();
+
+        let viable: Vec<&Vec2> = road_grid.roads.iter().map(
+            |x| x.get_first_point()
+        ).collect();
+
+        let mut rand_dest = *viable[rng.random_range(0..viable.len())];
+
+        while rand_dest == position { // Makes sure the destination is not just where the car started
+            rand_dest = *viable[rng.random_range(0..viable.len())];
+        }
+
+
+        let destination = Some(Destination {position: rand_dest });
+
+        let state = CarState::MovingToDestinationAuto(destination.unwrap_or(Destination { position }));
+
+
+        Self { position, id, state, color, network, destination, ..Default::default() }
     }
 
     pub fn get_id(&self) -> u16 {
@@ -109,6 +160,7 @@ impl Car {
 
     pub fn change_state(&mut self, state: CarState) {
         match state {
+
             CarState::IDLE => {
                 self.state = CarState::IDLE;
             },
@@ -128,6 +180,10 @@ impl Car {
                 self.state = CarState::AIControlled(desination);
                 self.destination = Some(desination);
             }
+            CarState::ReachedDestination => {
+                self.state = CarState::ReachedDestination;
+            },
+
         }
     }
 
@@ -137,7 +193,7 @@ impl Car {
 
         match &self.state {
 
-            CarState::IDLE => { // If this was reached, a destination was arrived at. The default behavior is to assign another destination. 
+            CarState::IDLE => {
 
 
             },
@@ -153,7 +209,7 @@ impl Car {
                 if distance_to_target < eps { // Arrived at Destination
                     self.position = destination.position;
                     self.destination = None;
-                    self.change_state(CarState::IDLE);
+                    self.change_state(CarState::ReachedDestination);
                 }
 
                 let angle_to_target = to_target.to_angle();
@@ -169,7 +225,7 @@ impl Car {
                 if !facing_target { self.rotate_car(if err > 0.1 {1.0} else {-1.0}); }
 
                 
-                let max_speed: f32 = 20.0;
+                let max_speed: f32 = 40.0;
                 let slow_radius = 10.0;
 
 
@@ -184,6 +240,7 @@ impl Car {
                 self.move_car(debug);
 
             },
+
             CarState::LookingForRoad => {
 
                 if let Some(closest) = road_grid.roads.iter().min_by(|a, b| {
@@ -200,12 +257,13 @@ impl Car {
                 else {
                     println!("No Roads found on Grid.");
                 }
-            }
+            },
 
             CarState::AIControlled(destination) => { //TODO Implement Follow Road
 
 
             },
+
             CarState::UserControlled(destination) => {
                 //let max_speed = 20.0;
                 let eps = 20.0;
@@ -213,9 +271,9 @@ impl Car {
                 let to_target = destination.position - self.position;
                 let distance_to_target = to_target.length();
 
-                if distance_to_target < eps {
+                if distance_to_target < eps { // Reached Destination
                     self.position = destination.position;
-                    self.change_state(CarState::IDLE);
+                    self.change_state(CarState::ReachedDestination);
                 }
 
                 self.move_car_manual(debug);
@@ -226,6 +284,11 @@ impl Car {
 
 
             },
+            
+            CarState::ReachedDestination => {
+                self.color.a = 0.0;
+            }
+        
         }
  
 

@@ -121,7 +121,7 @@ async fn main() {
         );
    */
 
-   let cars = CarWorld::new_random(5);
+   let cars = CarWorld::new_random(5, &road_grid);
 
     
     
@@ -150,25 +150,19 @@ async fn main() {
 
     let mut i = 0;
 
-    for _ in 0..3 {
+    loop {
+        handle_input(&mut camera);
+        set_camera(&camera);
+        clear_background(BEIGE);
 
-        while i <= 3000 {
+        sim.draw_sim(true);
+        sim.update(true);
 
-            handle_input(&mut camera);
-            set_camera(&camera);
-            clear_background(BEIGE);
-
-            sim.draw_sim(false);
-            sim.update(true);
-
-            next_frame().await;
-
-            i += 1;
-            println!("Frame {}", i);
-        
-        }
-        i = 0;
+        next_frame().await; 
     }
 
+   
+
+        
 } // End Simulation
     

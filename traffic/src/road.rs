@@ -1,3 +1,5 @@
+use std::ops::Index;
+
 use macroquad::{color::{BLACK, Color, PINK, RED}, math::Vec2, shapes::{draw_circle, draw_line}, window::{screen_height, screen_width}};
 use rand::{Rng, rng};
 
@@ -15,6 +17,8 @@ pub struct RoadGrid {
     pub roads: Vec<Road>,
     destinations: Vec<Destination>
 }
+
+
 
 impl RoadGrid {
     pub fn new(roads: Vec<Road>) -> Self {
@@ -40,6 +44,14 @@ impl RoadGrid {
     }
 }
 
+impl Index<u16> for RoadGrid {
+    type Output = Road;
+    fn index(&self, index: u16) -> &Self::Output {
+        self.roads.iter().find(
+            |x| x.get_id() == index
+        ).unwrap_or(&self.roads[0])
+    }
+}
 
 impl Road {
     pub fn new(origin: Vec2, end: Vec2, id: u16) -> Self {
@@ -96,6 +108,8 @@ impl Road {
     
 }
 
+
+
 pub fn draw_road(road: &Road, debug: bool) {
     
     const THICKNESS: f32 = 5.0; 
@@ -116,11 +130,12 @@ pub fn draw_road(road: &Road, debug: bool) {
 
          
         if debug {
-            draw_circle(curr.x, curr.y, 1.0, RED);
-            draw_circle(road.points.last().unwrap().x, road.points.last().unwrap().y, 1.0, PINK);
+            draw_circle(road.points.last().unwrap().x, road.points.last().unwrap().y, 10.0, PINK);
+            /* 
             if (i + 1) % 2 == 0 {
                 draw_line(curr.x, curr.y, next.x, next.y, THICKNESS / 4.0, BLACK);
             }
+            */
         }
 
 
