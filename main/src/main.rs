@@ -1,5 +1,7 @@
-use macroquad::prelude::*;
-use traffic::{cars::{Car, CarWorld, Destination}, road::{Road, RoadGrid}};
+use macroquad::{prelude::*, rand, window};
+use neural::{Activation, Layer, Network};
+use ::rand::Rng;
+use traffic::{cars::{Car, CarWorld, Destination}, road::{Road, RoadGrid, generate_road_grid}};
 
 const BASE_ZOOM: f32 = 0.003;
 
@@ -55,6 +57,11 @@ struct Simulation {
 }
 
 impl Simulation {
+
+    pub fn from_sim(sim: Self) -> Self {
+        Simulation { cars: sim.cars, roads: sim.roads }
+    }
+
     pub fn draw_sim(&self, debug: bool) {
         self.roads.draw_roads(debug);
         self.cars.draw_cars(debug);
@@ -89,19 +96,35 @@ async fn main() {
     
     
     // Road initialization
-    let road1 = Road::new(Vec2::new(center_x + 200.0, center_y), Vec2::new(center_x + 3080.0, center_y - 1200.0), 0);
-    let road_grid = RoadGrid::new(vec![road1]);
-    
+    // let road1 = Road::new(Vec2::new(center_x + 200.0, center_y), Vec2::new(center_x + 3080.0, center_y - 1200.0), 0);
+    // let road_grid = RoadGrid::new(vec![road1]);
+    let road_grid = generate_road_grid(5);
+
+    let mut rng = ::rand::rng();
+
+    let layers = 
+        vec![
+            Layer::new_random(4, 4, Activation::Tanh, &mut rng),
+            Layer::new_random(4, 2, Activation::Tanh, &mut rng)
+        ];
+
+    let inputs: Vec<f32> = vec![0.0, 0.5, 0.3, 0.2];
+    let network = Network::new(&layers);
+    let network2 = Network::new(&layers);
 
     // Car initialization
-    let car1 = Car::new(
+    /*let car1 = Car::new(
         Vec2::new(center_x, center_y + 200.0),
-        0.0,
         PINK,
-        1);
-        
-    let cars = CarWorld::new(vec![car1]);
+        network,
+        1
+        );
+   */
 
+   let cars = CarWorld::new_random(5);
+
+    
+    
     // Camera initialization
     let mut camera = Camera2D {
         target: Vec2 { x: center_x, y: center_y },
@@ -115,19 +138,37 @@ async fn main() {
         roads: road_grid
     };
 
-    // Update Loop
-    loop {
-
-        handle_input(&mut camera);
-        set_camera(&camera);
-        clear_background(BEIGE);
-
-        sim.draw_sim(true);
-        sim.update(true);
-
-        next_frame().await
 
 
+    let car_net = &sim.cars.cars[0].network;
+
+    let x = car_net.propagate(inputs);
+
+    println!("x: {:#?}", x);
+
+    println!("{}", car_net);
+
+    let mut i = 0;
+
+    for _ in 0..3 {
+
+        while i <= 3000 {
+
+            handle_input(&mut camera);
+            set_camera(&camera);
+            clear_background(BEIGE);
+
+            sim.draw_sim(false);
+            sim.update(true);
+
+            next_frame().await;
+
+            i += 1;
+            println!("Frame {}", i);
+        
+        }
+        i = 0;
     }
+
 } // End Simulation
     
