@@ -23,6 +23,8 @@ pub struct RoadGrid {
 impl RoadGrid {
     pub fn new(roads: Vec<Road>) -> Self {
 
+        assert!(roads.len() > 1, "There needs to be more than 1 road in a RoadGrid!"); // Some weird wacky behavior when this is < 2
+
         let destinations = roads.iter().map(
             |x| Destination {position: *x.get_first_point()}
         ).collect::<Vec<Destination>>();
@@ -173,7 +175,7 @@ pub fn generate_road_grid(roads: i32) -> RoadGrid {
 
     fn close(road1: &Road, road2: &Road) -> bool {
 
-        let eps = 5.0;
+        let eps = 100.0;
 
         if ((road1.points.first().unwrap().x - road2.points.first().unwrap().x).abs() < eps) || 
            ((road1.points.first().unwrap().y - road2.points.first().unwrap().y).abs() < eps) 

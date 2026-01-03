@@ -74,6 +74,7 @@ pub struct Car {
     speed: f32,
     rotation: f32,
     id: u16,
+    road_id: u16,
 
     // State Machine
     state: CarState,
@@ -91,12 +92,12 @@ pub struct Car {
     /// This measures the distance of the current car to it's destination
     distance_to_destination: f32,
 
-
-
     // Artificial Neural Network Fields
 
     pub network: Network,
     
+    // Genome Fields
+    time_spent_alive: f32,
 
 }
 
@@ -107,15 +108,21 @@ impl Default for Car {
             speed: 0.0, 
             rotation: 0.0, 
             id: 0, 
+            road_id: 0,
             state: CarState::IDLE, 
             color: WHITE, 
             destination: None, 
             off_roadness: 0.0, 
             obstruction_score: 0.0, 
             distance_to_destination: 0.0, 
-            network: Network::new(&vec![])}
+            network: Network::new(&vec![]),
+            time_spent_alive: 0.0,
+        }
     }
 }
+
+
+pub struct Ray(Vec2, Vec2);
 
 
 impl Car {
@@ -151,7 +158,7 @@ impl Car {
         let state = CarState::MovingToDestinationAuto(destination.unwrap_or(Destination { position }));
 
 
-        Self { position, id, state, color, network, destination, ..Default::default() }
+        Self { position, id, road_id, state, color, network, destination, ..Default::default() }
     }
 
     pub fn get_id(&self) -> u16 {
@@ -159,8 +166,8 @@ impl Car {
     }
 
     pub fn change_state(&mut self, state: CarState) {
-        match state {
 
+        match state {
             CarState::IDLE => {
                 self.state = CarState::IDLE;
             },
@@ -183,11 +190,13 @@ impl Car {
             CarState::ReachedDestination => {
                 self.state = CarState::ReachedDestination;
             },
-
         }
     }
 
     pub fn update(&mut self, road_grid: &RoadGrid, debug: bool) {
+
+        let obstruction_score: f32 = 0.0;
+
 
         match &self.state {
 
@@ -257,6 +266,7 @@ impl Car {
 
             CarState::AIControlled(destination) => { //TODO Implement Follow Road
 
+                self.time_spent_alive += get_frame_time();
 
 
             },
@@ -295,7 +305,7 @@ impl Car {
         self.rotation += amount * get_frame_time()
     }
 
-    fn move_car(&mut self, debug: bool) {
+    fn move_car(&mut self, _debug: bool) {
         
         let dt = 0.01;
         let dir = Vec2::from_angle(self.rotation);
@@ -341,7 +351,7 @@ impl Car {
 }
 
 
-fn arrived(v1: &Vec2, v2: &Vec2, eps: f32) -> bool {
+fn _arrived(v1: &Vec2, v2: &Vec2, eps: f32) -> bool {
     (v1.x - v2.x).abs() < eps &&
     (v1.y - v2.y).abs() < eps
 }
