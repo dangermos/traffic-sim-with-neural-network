@@ -1,6 +1,6 @@
 use macroquad::prelude::*;
 use neural::{Activation, Layer, Network};
-use traffic::{cars::CarWorld, road::{Road, RoadGrid}, simulation::Simulation};
+use traffic::{cars::{Car, CarWorld, Destination}, road::{Road, RoadGrid}, simulation::Simulation};
 
 const BASE_ZOOM: f32 = 0.003;
 const ACTIVE_LEVEL: usize = 4;
@@ -64,7 +64,7 @@ fn build_level_1(center: Vec2, screen: Vec2) -> Simulation {
 
     let road_grid = RoadGrid::new(roads);
     let cars = CarWorld::new_random(6, &road_grid);
-    Simulation { cars, roads: road_grid }
+    Simulation::new(cars, road_grid)
 }
 
 fn build_level_2(center: Vec2, screen: Vec2) -> Simulation {
@@ -87,7 +87,7 @@ fn build_level_2(center: Vec2, screen: Vec2) -> Simulation {
 
     let road_grid = RoadGrid::new(roads);
     let cars = CarWorld::new_random(12, &road_grid);
-    Simulation { cars, roads: road_grid }
+    Simulation::new(cars, road_grid)
 }
 
 fn build_level_3(center: Vec2, screen: Vec2) -> Simulation {
@@ -111,7 +111,7 @@ fn build_level_3(center: Vec2, screen: Vec2) -> Simulation {
 
     let road_grid = RoadGrid::new(roads);
     let cars = CarWorld::new_random(8, &road_grid);
-    Simulation { cars, roads: road_grid }
+    Simulation::new(cars, road_grid)
 }
 
 fn build_straight_road_4(center: Vec2, screen: Vec2) -> Simulation {
@@ -125,7 +125,36 @@ fn build_straight_road_4(center: Vec2, screen: Vec2) -> Simulation {
 
     let cars = CarWorld::new_random(1, &road_grid);
 
-    Simulation { cars, roads: road_grid }
+    Simulation::new(cars, road_grid)
+}
+
+fn test_sensors(center: Vec2, screen: Vec2) -> Simulation {
+
+    let roads = vec![
+            Road::new(center, vec2(center.x + 200.0, center.y), 0),
+            Road::new(vec2(center.x + 200.0, center.y), vec2(center.x + 200.0, center.y - 1000.0), 1)
+    ];
+
+    let mut rng = ::rand::rng();
+
+    let road_grid = RoadGrid::new(roads);
+
+    let layers = 
+        vec![ 
+            Layer::new_random(4, 4, Activation::Tanh, &mut rng),
+            Layer::new_random(4, 2, Activation::Tanh, &mut rng)
+        ];
+    let inputs: Vec<f32> = vec![0.0, 0.5, 0.3, 0.2];
+    let network = Network::new(&layers);
+
+    let cars = CarWorld::new(vec![
+        Car::new_on_road(&road_grid, 0, GRAY, network.clone(), 0),
+        Car::new_on_road(&road_grid, 1, PINK, network.clone(), 1),
+        Car::new(vec2(0.0, 0.0), GREEN, network.clone(), 2),
+    ]);
+
+    Simulation::new(cars, road_grid)
+
 }
 
 
@@ -151,9 +180,10 @@ async fn main() {
         build_level_1(center, screen),
         build_level_2(center, screen),
         build_level_3(center, screen),
-        build_straight_road_4(center, screen)
+        build_straight_road_4(center, screen),
+        test_sensors(center, screen),
     ];
-    let mut sim = build_straight_road_4(center, screen);
+    let mut sim = test_sensors(center, screen);
 
     // Neural Network Initialization
     let layers = 
@@ -172,6 +202,7 @@ async fn main() {
         ..Default::default()
     };
 
+        sim.cars.cars[0].change_state(traffic::cars::CarState::UserControlled(Destination {position: Vec2::ZERO}));
 
     loop {
 
@@ -183,6 +214,11 @@ async fn main() {
 
         sim.draw_sim(true);
         sim.update(true);
+
+
+        // Logic for Debugging Sensors
+
+
 
         time += get_frame_time();
         next_frame().await; 

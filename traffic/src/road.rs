@@ -1,4 +1,4 @@
-use std::ops::Index;
+use std::{collections::HashMap, ops::Index};
 
 use macroquad::{color::{BLACK, Color, PINK, RED}, math::Vec2, shapes::{draw_circle, draw_line}, window::{screen_height, screen_width}};
 use rand::{Rng, rng};
@@ -8,26 +8,62 @@ use crate::cars::Destination;
 
 #[derive(Clone, Debug)]
 pub struct Road {
-    points: Vec<Vec2>,
-    id: u16,
+    pub points: Vec<Vec2>,
+    road_id: u16,
+    from: Vec<Option<u16>>,
+    to: Vec<Option<u16>>,
 }
 
 #[derive(Clone, Debug)]
 pub struct RoadGrid {
     pub roads: Vec<Road>,
-    destinations: Vec<Destination>
+    destinations: Vec<Vec2>,
+    adjacency_graph: HashMap<u16, (u16, u16)>
 }
 
 
 
 impl RoadGrid {
-    pub fn new(roads: Vec<Road>) -> Self {
+    pub fn new(roads: Vec<Road>) -> Self { // TODO Make Adjacency Graph
 
         assert!(roads.len() > 1, "There needs to be more than 1 road in a RoadGrid!"); // Some weird wacky behavior when this is < 2
 
-        let destinations = roads.iter().map(
-            |x| Destination {position: *x.get_first_point()}
-        ).collect::<Vec<Destination>>();
+        let startpoints: Vec<Vec2> = roads.iter().map(|road| *road.get_first_point()).collect();
+        let endpoints: Vec<Vec2> = roads.iter().map(|road| *road.get_last_point()).collect();
+
+
+        let mut bindings = HashMap::new();
+
+        roads.iter().for_each(
+            |x| {bindings.insert(x, ());}
+        );
+
+
+        let mut to_mut = vec![];
+
+        for road in roads.iter_mut() {
+
+            let x = 
+                startpoints.iter()
+                .filter(|x| road.get_last_point() == *x)
+                .collect::<Vec<&Vec2>>();
+
+            
+
+            // road.to.extend_from_slice(x);
+
+
+            if endpoints.contains(&road.get_first_point()) {
+                
+            }
+        }
+
+
+        let mut adjacency: HashMap<u16, (u16, u16)> = HashMap::new();
+
+
+
+        //println!("adj: {:?}", adjacency);
 
         Self {
             destinations,
@@ -41,7 +77,7 @@ impl RoadGrid {
         );
     }
 
-    pub fn get_destinations(&self) -> &Vec<Destination> {
+    pub fn get_destinations(&self) -> &Vec<Vec2> {
         &self.destinations
     }
 }
@@ -93,16 +129,20 @@ impl Road {
         }
         fin_vector.push(end.clone());
 
-        Road { points: fin_vector, id}
+        Road { points: fin_vector, road_id: id, from: vec![], to: vec![]}
 
     }
 
     pub fn get_id(&self) -> u16 {
-        self.id
+        self.road_id
     }
 
     pub fn get_first_point(&self) -> &Vec2 {
-        self.points.get(0).expect("Attempted to get point of empty road")
+        self.points.get(0).expect("Attempted to get first point of empty road")
+    }
+
+    pub fn get_last_point(&self) -> &Vec2 {
+        self.points.last().expect("Attempted to get last point of empty road")
     }
  
     
