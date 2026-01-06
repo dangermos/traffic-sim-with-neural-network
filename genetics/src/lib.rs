@@ -1,4 +1,5 @@
-use traffic::cars::Car;
+use neural::Network;
+use traffic::{cars::Car, simulation::Simulation};
 
 
 /*
@@ -15,19 +16,20 @@ The loop for neuroevolution is
 
 */
 
-const OFF_ROAD_PENALTY: f32 = 1.0;
-const CRASH_PENALTY: f32 = 1000.0;
+const OFF_ROAD_PENALTY: f32 = 0.9;
+const CRASH_PENALTY: f32 = 0.4;
 
 
 
 struct Genome {
-    
+    net: Network,
+    fitness: f32,
 }
 
 
 
 
-pub fn fitness() {
+pub fn fitness(genome: Genome, ) {
     
 }
 
@@ -35,3 +37,8 @@ pub fn mutate() {
 
 }
 
+pub async fn run_simulation(simulation: Simulation, epochs: u32, population_size: u32, ) {
+
+
+
+}

@@ -1,6 +1,8 @@
 use macroquad::prelude::*;
 use neural::{Activation, Layer, Network};
-use traffic::{cars::{Car, CarWorld, Destination}, road::{Road, RoadGrid}, simulation::Simulation};
+use ::rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
+use traffic::{cars::{Car, CarWorld, Destination}, road::{Road, RoadGrid, RoadId, generate_road_grid}, simulation::Simulation};
 
 const BASE_ZOOM: f32 = 0.003;
 const ACTIVE_LEVEL: usize = 4;
@@ -50,24 +52,24 @@ fn handle_input(camera: &mut Camera2D) {
 
 }
 
-fn build_level_1(center: Vec2, screen: Vec2) -> Simulation {
+fn build_level_1<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
     let horiz = screen.x * 0.4;
     let vert = screen.y * 0.3;
     let diag = screen.x.min(screen.y) * 0.35;
 
     let roads = vec![
-        Road::new(center + vec2(-horiz, 0.0), center + vec2(horiz, 0.0), 0),
-        Road::new(center + vec2(0.0, -vert), center + vec2(0.0, vert), 1),
-        Road::new(center + vec2(-diag, -diag * 0.6), center + vec2(diag, diag * 0.6), 2),
-        Road::new(center + vec2(-diag, diag * 0.6), center + vec2(diag, -diag * 0.6), 3),
+        Road::new(center + vec2(-horiz, 0.0), center + vec2(horiz, 0.0), RoadId(0)),
+        Road::new(center + vec2(0.0, -vert), center + vec2(0.0, vert), RoadId(1)),
+        Road::new(center + vec2(-diag, -diag * 0.6), center + vec2(diag, diag * 0.6), RoadId(2)),
+        Road::new(center + vec2(-diag, diag * 0.6), center + vec2(diag, -diag * 0.6), RoadId(3)),
     ];
 
     let road_grid = RoadGrid::new(roads);
-    let cars = CarWorld::new_random(6, &road_grid);
+    let cars = CarWorld::new_random(6, &road_grid, rng);
     Simulation::new(cars, road_grid)
 }
 
-fn build_level_2(center: Vec2, screen: Vec2) -> Simulation {
+fn build_level_2<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
     let margin = 120.0;
     let left = margin;
     let right = screen.x - margin;
@@ -75,22 +77,22 @@ fn build_level_2(center: Vec2, screen: Vec2) -> Simulation {
     let bottom = screen.y - margin;
 
     let roads = vec![
-        Road::new(vec2(left, top), vec2(right, top), 0),
-        Road::new(vec2(right, top), vec2(right, bottom), 1),
-        Road::new(vec2(right, bottom), vec2(left, bottom), 2),
-        Road::new(vec2(left, bottom), vec2(left, top), 3),
-        Road::new(vec2(left, top), vec2(right, bottom), 4),
-        Road::new(vec2(left, bottom), vec2(right, top), 5),
-        Road::new(vec2(left, center.y), vec2(right, center.y), 6),
-        Road::new(vec2(center.x, top), vec2(center.x, bottom), 7),
+        Road::new(vec2(left, top), vec2(right, top), RoadId(0)),
+        Road::new(vec2(right, top), vec2(right, bottom), RoadId(1)),
+        Road::new(vec2(right, bottom), vec2(left, bottom), RoadId(2)),
+        Road::new(vec2(left, bottom), vec2(left, top), RoadId(3)),
+        Road::new(vec2(left, top), vec2(right, bottom), RoadId(4)),
+        Road::new(vec2(left, bottom), vec2(right, top), RoadId(5)),
+        Road::new(vec2(left, center.y), vec2(right, center.y), RoadId(6)),
+        Road::new(vec2(center.x, top), vec2(center.x, bottom), RoadId(7)),
     ];
 
     let road_grid = RoadGrid::new(roads);
-    let cars = CarWorld::new_random(12, &road_grid);
+    let cars = CarWorld::new_random(12, &road_grid, rng);
     Simulation::new(cars, road_grid)
 }
 
-fn build_level_3(center: Vec2, screen: Vec2) -> Simulation {
+fn build_level_3<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
     let margin = 80.0;
     let left = margin;
     let right = screen.x - margin;
@@ -102,55 +104,54 @@ fn build_level_3(center: Vec2, screen: Vec2) -> Simulation {
     let v2 = left + (right - left) * 0.66;
 
     let roads = vec![
-        Road::new(vec2(left, h1), vec2(right, h1), 0),
-        Road::new(vec2(left, h2), vec2(right, h2), 1),
-        Road::new(vec2(v1, top), vec2(v1, bottom), 2),
-        Road::new(vec2(v2, top), vec2(v2, bottom), 3),
-        Road::new(vec2(left, top), vec2(right, bottom), 4),
+        Road::new(vec2(left, h1), vec2(right, h1), RoadId(0)),
+        Road::new(vec2(left, h2), vec2(right, h2), RoadId(1)),
+        Road::new(vec2(v1, top), vec2(v1, bottom), RoadId(2)),
+        Road::new(vec2(v2, top), vec2(v2, bottom), RoadId(3)),
+        Road::new(vec2(left, top), vec2(right, bottom), RoadId(4)),
     ];
 
     let road_grid = RoadGrid::new(roads);
-    let cars = CarWorld::new_random(8, &road_grid);
+    let cars = CarWorld::new_random(8, &road_grid, rng);
     Simulation::new(cars, road_grid)
 }
 
-fn build_straight_road_4(center: Vec2, screen: Vec2) -> Simulation {
+fn build_straight_road_4<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
 
     let roads = vec![
-        Road::new(center, vec2(center.x + 200.0, center.y), 0),
-        Road::new(vec2(center.x + 200.0, center.y), vec2(center.x + 200.0, center.y - 1000.0), 1)
+        Road::new(center, vec2(center.x + 200.0, center.y), RoadId(0)),
+        Road::new(vec2(center.x + 200.0, center.y), vec2(center.x + 200.0, center.y - 1000.0), RoadId(1))
     ];
 
     let road_grid = RoadGrid::new(roads);
 
-    let cars = CarWorld::new_random(1, &road_grid);
+    let cars = CarWorld::new_random(1, &road_grid, rng);
 
     Simulation::new(cars, road_grid)
 }
 
-fn test_sensors(center: Vec2, screen: Vec2) -> Simulation {
+fn test_sensors<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
 
     let roads = vec![
-            Road::new(center, vec2(center.x + 200.0, center.y), 0),
-            Road::new(vec2(center.x + 200.0, center.y), vec2(center.x + 200.0, center.y - 1000.0), 1)
+            Road::new(center, vec2(center.x + 200.0, center.y), RoadId(0)),
+            Road::new(vec2(center.x + 200.0, center.y), vec2(center.x + 200.0, center.y - 1000.0), RoadId(1)),
     ];
 
-    let mut rng = ::rand::rng();
-
-    let road_grid = RoadGrid::new(roads);
+    let road_grid = generate_road_grid(20);
+    //let road_grid = RoadGrid::new(roads);
 
     let layers = 
         vec![ 
-            Layer::new_random(4, 4, Activation::Tanh, &mut rng),
-            Layer::new_random(4, 2, Activation::Tanh, &mut rng)
+            Layer::new_random(4, 4, Activation::Tanh, rng),
+            Layer::new_random(4, 2, Activation::Tanh, rng)
         ];
     let inputs: Vec<f32> = vec![0.0, 0.5, 0.3, 0.2];
     let network = Network::new(&layers);
 
     let cars = CarWorld::new(vec![
-        Car::new_on_road(&road_grid, 0, GRAY, network.clone(), 0),
-        Car::new_on_road(&road_grid, 1, PINK, network.clone(), 1),
-        Car::new(vec2(0.0, 0.0), GREEN, network.clone(), 2),
+        Car::new_on_road(&road_grid, RoadId(0), GRAY, network.clone(), 0),
+        Car::new_on_road(&road_grid, RoadId(1), PINK, network.clone(), 1),
+        //Car::new(vec2(0.0, 0.0), GREEN, network.clone(), 2),
     ]);
 
     Simulation::new(cars, road_grid)
@@ -162,7 +163,7 @@ fn test_sensors(center: Vec2, screen: Vec2) -> Simulation {
 async fn main() {
 
     // rng and time var
-    let mut rng = ::rand::rng();
+    let mut rng = ChaCha8Rng::seed_from_u64(42);
     let mut time = 0.0;
 
 
@@ -177,13 +178,13 @@ async fn main() {
 
     // levels
     let mut levels = vec![
-        build_level_1(center, screen),
-        build_level_2(center, screen),
-        build_level_3(center, screen),
-        build_straight_road_4(center, screen),
-        test_sensors(center, screen),
+        build_level_1(center, screen, &mut rng),
+        build_level_2(center, screen, &mut rng),
+        build_level_3(center, screen, &mut rng),
+        build_straight_road_4(center, screen, &mut rng),
+        test_sensors(center, screen, &mut rng),
     ];
-    let mut sim = test_sensors(center, screen);
+    let mut sim = test_sensors(center, screen, &mut rng);
 
     // Neural Network Initialization
     let layers = 
@@ -202,7 +203,18 @@ async fn main() {
         ..Default::default()
     };
 
-        sim.cars.cars[0].change_state(traffic::cars::CarState::UserControlled(Destination {position: Vec2::ZERO}));
+    sim.cars.cars[0].change_state(traffic::cars::CarState::UserControlled(Destination {position: *sim.roads.roads[4].get_first_point()}));
+    sim.cars.cars[1].change_state(traffic::cars::CarState::AIControlled(Destination {position: Vec2::ZERO}));
+    
+
+
+    println!(
+    "Level Description:
+     Cars: {:?}
+     Roads: {:?}
+     ", sim.cars.cars.iter().map(|x| x.get_id()).collect::<Vec<u16>>(), 
+        sim.roads.roads.iter().map(|x| x.get_id()).collect::<Vec<RoadId>>());
+
 
     loop {
 

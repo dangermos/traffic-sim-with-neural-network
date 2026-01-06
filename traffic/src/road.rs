@@ -85,11 +85,12 @@ impl RoadGrid {
         // Second pass: build next_roads
         let mut next_roads: HashMap<RoadId, Vec<RoadId>> = HashMap::new();
         for road in &roads {
-            if let Some(to_node) = road.to {
-                if let Some(outgoing) = out_by_node.get(&to_node) {
-                     next_roads.insert(road.road_id, outgoing.clone());
-                }
-            }
+            // Insert an entry for every road; dead ends get an empty vec.
+            let transitions = road
+                .to
+                .and_then(|to_node| out_by_node.get(&to_node).cloned())
+                .unwrap_or_default();
+            next_roads.insert(road.road_id, transitions);
         }
 
         Self {
@@ -111,7 +112,7 @@ impl Index<RoadId> for RoadGrid {
     fn index(&self, index: RoadId) -> &Self::Output {
         self.roads.iter().find(
             |x| x.get_id() == index
-        ).expect("RoadId not found in grid")
+        ).expect(format!("Could not find road {:?} in Road Grid {:?}", index, self.roads.iter().map(|road| road.get_id()).collect::<Vec<RoadId>>()).as_str())
     }
 }
 
@@ -193,70 +194,75 @@ pub fn draw_road(road: &Road, debug: bool) {
 
 pub fn generate_road_grid(roads: u16) -> RoadGrid {
 
-    let max_x = screen_width() as i32;
-    let max_y = screen_height() as i32;
+    // Roughly split requested roads into a Manhattan-style grid of vertical and horizontal streets.
+    let total = roads.max(4) as usize;
+    let vertical_count = (total / 2).max(2);
+    let horizontal_count = total - vertical_count; // guaranteed >= 2 because total >= 4
 
     let mut rng = rng();
 
+    // Space lines across a "city" that is much larger than the current viewport.
+    let max_axis = vertical_count.max(horizontal_count) as f32;
+    let block_size = 500.0;
+    let half_span = block_size * (max_axis - 1.0) * 0.5 + block_size;
+    let jitter_fraction = 0.25;
 
-    let mut r: Vec<Road> = vec![];
-
-    // Generates (roads) amount of random roads
-    let mut i: usize = 0;
-
-    while i < roads as usize {
-
-        let rand_x1 = rng.random_range(0..max_x) as f32;
-        let rand_y1 = rng.random_range(0..max_y) as f32;
-        let rand_x2 = rng.random_range(0..max_x) as f32;
-        let rand_y2 = rng.random_range(0..max_y) as f32;
-
-
-        let origin = Vec2::new(rand_x1, rand_y1);
-        let end = Vec2::new(rand_x2, rand_y2);
-    
-        r.push(Road::new(
-            origin, end,
-            RoadId(i)));
-        i+= 1;
-    }
-
-    fn close(road1: &Road, road2: &Road) -> bool {
-
-        let eps = 100.0;
-
-        if ((road1.points.first().unwrap().x - road2.points.first().unwrap().x).abs() < eps) || 
-           ((road1.points.first().unwrap().y - road2.points.first().unwrap().y).abs() < eps) 
-           {
-            true
+    // Generate evenly spaced positions with a bit of jitter so the grid feels less artificial.
+    fn line_positions(
+        count: usize,
+        half_span: f32,
+        jitter_fraction: f32,
+        rng: &mut impl Rng,
+    ) -> Vec<f32> {
+        if count == 0 {
+            return Vec::new();
         }
-        else {
-            false
+        if count == 1 {
+            return vec![0.0];
         }
 
+        let spacing = (half_span * 2.0) / ((count - 1) as f32);
+        let jitter_max = spacing * jitter_fraction;
 
-    }
-
-    let mut filtered: Vec<Road> = Vec::with_capacity(r.len());
-    for road in r.drain(..) {
-        if filtered.iter().any(|existing| close(existing, &road)) {
-            continue;
+        let mut positions = Vec::with_capacity(count);
+        for i in 0..count {
+            let base = -half_span + i as f32 * spacing;
+            let jitter = if jitter_max > 0.0 {
+                rng.random_range((-jitter_max)..jitter_max)
+            } else {
+                0.0
+            };
+            positions.push(base + jitter);
         }
-        filtered.push(road);
-    }
-    r = filtered;
-    
-    // Now lets connect them!
-    let mut temp = vec![];
 
-    for x in r.windows(2) {
-        temp.push(Road::new(*x[0].points.last().unwrap(), *x[1].get_first_point(), RoadId(i)));
-        i += 1;
+        positions.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        positions
     }
 
-    r.append(&mut temp);
+    let city_center = Vec2::new(screen_width() * 0.5, screen_height() * 0.5);
+    let xs = line_positions(vertical_count, half_span, jitter_fraction, &mut rng);
+    let ys = line_positions(horizontal_count, half_span, jitter_fraction, &mut rng);
 
-    RoadGrid::new(r)
+    let mut generated: Vec<Road> = Vec::with_capacity(vertical_count + horizontal_count);
+    let mut id: usize = 0;
+
+    // Vertical streets
+    for x in xs {
+        let start = Vec2::new(city_center.x + x, city_center.y - half_span);
+        let end = Vec2::new(city_center.x + x, city_center.y + half_span);
+        generated.push(Road::new(start, end, RoadId(id)));
+        id += 1;
+    }
+
+    // Horizontal streets
+    for y in ys {
+        let start = Vec2::new(city_center.x - half_span, city_center.y + y);
+        let end = Vec2::new(city_center.x + half_span, city_center.y + y);
+        generated.push(Road::new(start, end, RoadId(id)));
+        id += 1;
+    }
+
+    RoadGrid::new(generated)
 }
 
 #[cfg(test)]
