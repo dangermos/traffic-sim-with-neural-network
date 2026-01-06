@@ -47,7 +47,7 @@ impl CarWorld {
                 let (r, g, b, _a): (u8, u8, u8, u8) = rng.random();  
                 Car::new_on_road(
                     road_grid, 
-            RoadId((x % (road_grid.roads.len() + 1) as i32) as u16),
+            RoadId((x as usize % (road_grid.roads.len() + 1))),
                     Color::from_rgba(r, g, b, 255),
             networks[x as usize].clone(),
             x as u16
