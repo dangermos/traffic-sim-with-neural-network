@@ -4,7 +4,7 @@ use ::rand::{Rng, distr::uniform::SampleRange};
 
 use macroquad::prelude::*;
 use neural::{Activation, Layer, Network};
-use crate::{road::{self, RoadGrid}, simulation::{CarObs, Object, Simulation}};
+use crate::{road::{self, RoadGrid, RoadId}, simulation::{CarObs, Object, Simulation}};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Destination {
@@ -47,7 +47,7 @@ impl CarWorld {
                 let (r, g, b, _a): (u8, u8, u8, u8) = rng.random();  
                 Car::new_on_road(
                     road_grid, 
-            (x % (road_grid.roads.len() + 1) as i32 ) as u16,
+            RoadId((x % (road_grid.roads.len() + 1) as i32) as u16),
                     Color::from_rgba(r, g, b, 255),
             networks[x as usize].clone(),
             x as u16
@@ -72,6 +72,7 @@ pub enum CarState {
     UserControlled(Destination),
     AIControlled(Destination),
     ReachedDestination,
+    Crashed,
 }
 
 #[derive(Clone, Debug)]
@@ -80,8 +81,8 @@ pub struct Car {
     pub position: Vec2,
     pub speed: f32,
     pub rotation: f32,
-    id: u16,
-    road_id: u16,
+    car_id: u16,
+    road_id: RoadId,
 
     // State Machine
     state: CarState,
@@ -115,8 +116,8 @@ impl Default for Car {
             position: Vec2 { x: 0.0, y: 0.0 }, 
             speed: 0.0, 
             rotation: 0.0, 
-            id: 0, 
-            road_id: 0,
+            car_id: 0, 
+            road_id: RoadId(0),
             state: CarState::IDLE, 
             color: WHITE, 
             destination: None, 
@@ -178,13 +179,13 @@ impl Car {
     
     pub fn new(position: Vec2, color: Color, network: Network, car_id: u16) -> Self {
         
-        Self { position, id: car_id, color, state: CarState::AIControlled(Destination { position: Vec2::ZERO}), network,
+        Self { position, car_id, color, state: CarState::AIControlled(Destination { position: Vec2::ZERO}), network,
             ..Default::default()
         }
     }
 
     /// Spawns a Car on a Road with given `road_id`
-    pub fn new_on_road(road_grid: &RoadGrid, road_id: u16, color: Color, network: Network, car_id: u16) -> Self {
+    pub fn new_on_road(road_grid: &RoadGrid, road_id: RoadId, color: Color, network: Network, car_id: u16) -> Self {
 
         let position = *road_grid[road_id].get_first_point();
         let id = car_id;
@@ -208,11 +209,11 @@ impl Car {
 
         let state = CarState::AIControlled(destination.unwrap_or(Destination { position }));
 
-        Self { position, rotation, id, road_id, state, color, network, destination, ..Default::default() }
+        Self { position, rotation, car_id, road_id, state, color, network, destination, ..Default::default() }
     }
 
     pub fn get_id(&self) -> u16 {
-        self.id
+        self.car_id
     }
 
     pub fn change_state(&mut self, state: CarState) {
@@ -240,6 +241,10 @@ impl Car {
             CarState::ReachedDestination => {
                 self.state = CarState::ReachedDestination;
             },
+            CarState::Crashed => {
+                self.state = CarState::Crashed;
+            }
+
         }
     }
 
@@ -269,52 +274,11 @@ impl Car {
 
         // Off-Road Score
         
-        fn point_segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
-            let ab = b - a;
-            let ab_len2 = ab.length_squared();
-            if ab_len2 <= 1e-6 {
-                return (p - a).length();
-            }
-            let t = ((p - a).dot(ab) / ab_len2).clamp(0.0, 1.0);
-            let closest = a + ab * t;
-
-            (p - closest).length()
-        }
-
-        fn distance_to_road_centerline(p: Vec2, road_points: &[Vec2]) -> f32 {
-            if road_points.len() < 2 {
-                return f32::INFINITY;
-            }
-
-            let mut best = f32::INFINITY;
-            for seg in road_points.windows(2) {
-                let d = point_segment_distance(p, seg[0], seg[1]);
-                best = best.min(d);
-            }
-            
-            best
-        }
-
-        fn on_roadness(car: &Car, road_grid: &RoadGrid) -> f32 {
-            let road_id = car.road_id;
-            let road = &road_grid[road_id];
-
-            let road_width = 30.0_f32;
-            let r = road_width * 0.5;
-
-            let d = distance_to_road_centerline(car.position, &road.points);
-
-            // Map distance to [0,1] where 1 = on road, 0 = far off road
-            let overshoot = (d - r).max(0.0);
-            let off_norm = (overshoot / r).clamp(0.0, 1.0);
-            1.0 - off_norm
-        }
-
+        
         self.on_roadness = on_roadness(self, road_grid);
 
         println!("On Roadness: {:.2}%", self.on_roadness * 100.0);
 
-        self.time_spent_alive += get_frame_time();
         self.distance_to_destination = manhattan_distance(&self.position, &self.destination.unwrap_or_default().position);
 
 
@@ -322,6 +286,7 @@ impl Car {
 
             CarState::IDLE => {
 
+                self.time_spent_alive += get_frame_time();
 
             },
 
@@ -382,14 +347,16 @@ impl Car {
                 else {
                     println!("No Roads found on Grid.");
                 }
+
+                self.time_spent_alive += get_frame_time();
+
             },
 
             CarState::AIControlled(destination) => { //TODO Implement Follow Road
 
-
-
                 // println!("Hi from car {}, I've been alive for {:.0} seconds", self.get_id(), self.time_spent_alive)
 
+                self.time_spent_alive += get_frame_time();
                 
             },
 
@@ -411,11 +378,16 @@ impl Car {
                     println!("Distance to Target {}", distance_to_target);
                 }
 
-
+                self.time_spent_alive += get_frame_time();
             },
             
             CarState::ReachedDestination => {
                 self.color.a = 0.2;
+            },
+
+            CarState::Crashed => {
+                self.speed = 0.0;
+
             }
         
         }
@@ -503,6 +475,47 @@ impl Car {
 
 
 
+fn point_segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+            let ab = b - a;
+            let ab_len2 = ab.length_squared();
+            if ab_len2 <= 1e-6 {
+                return (p - a).length();
+            }
+            let t = ((p - a).dot(ab) / ab_len2).clamp(0.0, 1.0);
+            let closest = a + ab * t;
+
+            (p - closest).length()
+        }
+
+fn distance_to_road_centerline(p: Vec2, road_points: &[Vec2]) -> f32 {
+    if road_points.len() < 2 {
+        return f32::INFINITY;
+    }
+
+    let mut best = f32::INFINITY;
+    for seg in road_points.windows(2) {
+        let d = point_segment_distance(p, seg[0], seg[1]);
+        best = best.min(d);
+    }
+    
+    best
+}
+
+fn on_roadness(car: &Car, road_grid: &RoadGrid) -> f32 {
+    let road_id = car.road_id;
+    let road = &road_grid[road_id];
+
+    let road_width = 30.0_f32;
+    let r = road_width * 0.5;
+
+    let d = distance_to_road_centerline(car.position, &road.points);
+
+    // Map distance to [0,1] where 1 = on road, 0 = far off road
+    let overshoot = (d - r).max(0.0);
+    let off_norm = (overshoot / r).clamp(0.0, 1.0);
+    1.0 - off_norm
+}
+
 fn arrived(v1: &Vec2, v2: &Vec2, eps: f32) -> bool {
     (v1.x - v2.x).abs() < eps &&
     (v1.y - v2.y).abs() < eps
@@ -562,9 +575,9 @@ pub fn draw_car(car: &Car, debug: bool) {
         }
 
 
-    draw_obstruction_rays(car);
-    draw_text(&car.get_id().to_string(), car.position.x + dims.0 / 2.0, car.position.y, 30.0, GREEN);
-    draw_text(format!("{:.0}", &car.position).as_str(), car.position.x + dims.0 / 2.0, car.position.y + 20.0, 20.0, GREEN);
+        draw_obstruction_rays(car);
+        draw_text(&car.get_id().to_string(), car.position.x + dims.0 / 2.0, car.position.y, 30.0, GREEN);
+        draw_text(format!("{:.0}", &car.position).as_str(), car.position.x + dims.0 / 2.0, car.position.y + 20.0, 20.0, GREEN);
 
     }                     
 

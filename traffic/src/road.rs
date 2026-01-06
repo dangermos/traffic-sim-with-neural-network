@@ -1,74 +1,73 @@
-use std::{collections::HashMap, ops::Index};
+use std::{collections::HashMap, hash::Hash, ops::Index};
 
-use macroquad::{color::{BLACK, Color, PINK, RED}, math::Vec2, shapes::{draw_circle, draw_line}, window::{screen_height, screen_width}};
+use macroquad::{color::{BLACK, Color, PINK, RED}, 
+    math::{Vec2, Vec2Swizzles}, 
+    shapes::{draw_circle, draw_line}, 
+    window::{screen_height, screen_width}
+};
+
 use rand::{Rng, rng};
 
-use crate::cars::Destination;
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NodeId(pub u16);
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RoadId(pub u16);
 
 
 #[derive(Clone, Debug)]
 pub struct Road {
+    pub road_id: RoadId,
+
     pub points: Vec<Vec2>,
-    road_id: u16,
-    from: Vec<Option<u16>>,
-    to: Vec<Option<u16>>,
+    from: Option<NodeId>,
+    to: Option<NodeId>,
 }
 
 #[derive(Clone, Debug)]
 pub struct RoadGrid {
-    pub roads: Vec<Road>,
-    destinations: Vec<Vec2>,
-    adjacency_graph: HashMap<u16, (u16, u16)>
+    pub roads: Vec<Road>, // A collection of the roads
+    pub nodes: Vec<Vec2>, // Map from NodeId -> Position of that node
+    pub outgoing_roads: HashMap<RoadId, Vec<RoadId>>, // Map from NodeId -> All Roads connected to that Node
 }
 
-
+fn approx_equal(num1: f32, num2: f32, eps: f32) -> bool {
+    return (num1 - num2).abs() <= eps;
+}
 
 impl RoadGrid {
-    pub fn new(roads: Vec<Road>) -> Self { // TODO Make Adjacency Graph
+    pub fn new(mut roads: Vec<Road>) -> Self { // TODO Make Adjacency Graph
 
         assert!(roads.len() > 1, "There needs to be more than 1 road in a RoadGrid!"); // Some weird wacky behavior when this is < 2
 
-        let startpoints: Vec<Vec2> = roads.iter().map(|road| *road.get_first_point()).collect();
-        let endpoints: Vec<Vec2> = roads.iter().map(|road| *road.get_last_point()).collect();
+        let eps = 0.1;
 
+         let mut outgoing = HashMap::new();
 
-        let mut bindings = HashMap::new();
-
-        roads.iter().for_each(
-            |x| {bindings.insert(x, ());}
-        );
-
-
-        let mut to_mut = vec![];
+        let mut node_num: u16 = 0;
 
         for road in roads.iter_mut() {
+            let (start, end) = (road.get_first_point(), road.get_last_point());
 
-            let x = 
-                startpoints.iter()
-                .filter(|x| road.get_last_point() == *x)
-                .collect::<Vec<&Vec2>>();
+            node_pos.insert(NodeId(node_num), start);
+
+            node_pos.insert(k, v)
 
             
 
-            // road.to.extend_from_slice(x);
-
-
-            if endpoints.contains(&road.get_first_point()) {
-                
-            }
         }
+        
 
-
-        let mut adjacency: HashMap<u16, (u16, u16)> = HashMap::new();
-
-
-
-        //println!("adj: {:?}", adjacency);
 
         Self {
-            destinations,
-            roads 
+            roads,
+            node_positions,
+            outgoing_roads,
         }
+
+
     }
 
     pub fn draw_roads(&self, debug: bool) {
@@ -76,23 +75,19 @@ impl RoadGrid {
             |x| draw_road(x, debug)
         );
     }
-
-    pub fn get_destinations(&self) -> &Vec<Vec2> {
-        &self.destinations
-    }
 }
 
-impl Index<u16> for RoadGrid {
+impl Index<RoadId> for RoadGrid {
     type Output = Road;
-    fn index(&self, index: u16) -> &Self::Output {
+    fn index(&self, index: RoadId) -> &Self::Output {
         self.roads.iter().find(
             |x| x.get_id() == index
-        ).unwrap_or(&self.roads[0])
+        ).unwrap()
     }
 }
 
 impl Road {
-    pub fn new(origin: Vec2, end: Vec2, id: u16) -> Self {
+    pub fn new(origin: Vec2, end: Vec2, id: RoadId) -> Self {
 
         let mut fin_vector: Vec<Vec2> = Vec::new();
         fin_vector.push(origin.clone());
@@ -129,11 +124,11 @@ impl Road {
         }
         fin_vector.push(end.clone());
 
-        Road { points: fin_vector, road_id: id, from: vec![], to: vec![]}
+        Road { points: fin_vector, road_id: id, from: None, to: None}
 
     }
 
-    pub fn get_id(&self) -> u16 {
+    pub fn get_id(&self) -> RoadId {
         self.road_id
     }
 
@@ -183,7 +178,7 @@ pub fn draw_road(road: &Road, debug: bool) {
 
 }
 
-pub fn generate_road_grid(roads: i32) -> RoadGrid {
+pub fn generate_road_grid(roads: u16) -> RoadGrid {
 
     let max_x = screen_width() as i32;
     let max_y = screen_height() as i32;
@@ -194,7 +189,7 @@ pub fn generate_road_grid(roads: i32) -> RoadGrid {
     let mut r: Vec<Road> = vec![];
 
     // Generates (roads) amount of random roads
-    let mut i: i32 = 0;
+    let mut i: u16 = 0;
 
     while i < roads {
 
@@ -209,7 +204,7 @@ pub fn generate_road_grid(roads: i32) -> RoadGrid {
     
         r.push(Road::new(
             origin, end,
-            i as u16));
+            RoadId(i)));
         i+= 1;
     }
 
@@ -242,7 +237,7 @@ pub fn generate_road_grid(roads: i32) -> RoadGrid {
     let mut temp = vec![];
 
     for x in r.windows(2) {
-        temp.push(Road::new(*x[0].points.last().unwrap(), *x[1].get_first_point(), i as u16));
+        temp.push(Road::new(*x[0].points.last().unwrap(), *x[1].get_first_point(), RoadId(i)));
         i += 1;
     }
 
