@@ -1,17 +1,23 @@
+use ::rand::{Rng, SeedableRng};
 use macroquad::prelude::*;
 use neural::{Activation, Layer, Network};
-use ::rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use traffic::{cars::{Car, CarWorld, Destination}, road::{Road, RoadGrid, RoadId, generate_road_grid}, simulation::Simulation};
+use traffic::{
+    cars::{Car, CarWorld, Destination},
+    road::{Road, RoadGrid, RoadId, generate_road_grid},
+    simulation::Simulation,
+};
 
 const BASE_ZOOM: f32 = 0.003;
 const ACTIVE_LEVEL: usize = 4;
 
-
 fn handle_input(camera: &mut Camera2D) {
-
     let dt = 0.01;
-    let pan_speed = if is_key_down(KeyCode::LeftShift) { 2.0 } else { 1.0 };
+    let pan_speed = if is_key_down(KeyCode::LeftShift) {
+        2.0
+    } else {
+        1.0
+    };
     let pan_step = pan_speed * dt / camera.zoom.x.abs().max(0.0005);
 
     if is_key_down(KeyCode::W) {
@@ -49,7 +55,6 @@ fn handle_input(camera: &mut Camera2D) {
         camera.zoom.x = (camera.zoom.x * factor).clamp(0.0001, 0.005);
         camera.zoom.y = (camera.zoom.y * factor).clamp(0.0001, 0.005);
     }
-
 }
 
 fn build_level_1<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
@@ -58,10 +63,26 @@ fn build_level_1<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation 
     let diag = screen.x.min(screen.y) * 0.35;
 
     let roads = vec![
-        Road::new(center + vec2(-horiz, 0.0), center + vec2(horiz, 0.0), RoadId(0)),
-        Road::new(center + vec2(0.0, -vert), center + vec2(0.0, vert), RoadId(1)),
-        Road::new(center + vec2(-diag, -diag * 0.6), center + vec2(diag, diag * 0.6), RoadId(2)),
-        Road::new(center + vec2(-diag, diag * 0.6), center + vec2(diag, -diag * 0.6), RoadId(3)),
+        Road::new(
+            center + vec2(-horiz, 0.0),
+            center + vec2(horiz, 0.0),
+            RoadId(0),
+        ),
+        Road::new(
+            center + vec2(0.0, -vert),
+            center + vec2(0.0, vert),
+            RoadId(1),
+        ),
+        Road::new(
+            center + vec2(-diag, -diag * 0.6),
+            center + vec2(diag, diag * 0.6),
+            RoadId(2),
+        ),
+        Road::new(
+            center + vec2(-diag, diag * 0.6),
+            center + vec2(diag, -diag * 0.6),
+            RoadId(3),
+        ),
     ];
 
     let road_grid = RoadGrid::new(roads);
@@ -117,10 +138,13 @@ fn build_level_3<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation 
 }
 
 fn build_straight_road_4<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
-
     let roads = vec![
         Road::new(center, vec2(center.x + 200.0, center.y), RoadId(0)),
-        Road::new(vec2(center.x + 200.0, center.y), vec2(center.x + 200.0, center.y - 1000.0), RoadId(1))
+        Road::new(
+            vec2(center.x + 200.0, center.y),
+            vec2(center.x + 200.0, center.y - 1000.0),
+            RoadId(1),
+        ),
     ];
 
     let road_grid = RoadGrid::new(roads);
@@ -131,20 +155,22 @@ fn build_straight_road_4<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Sim
 }
 
 fn test_sensors<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
-
     let roads = vec![
-            Road::new(center, vec2(center.x + 200.0, center.y), RoadId(0)),
-            Road::new(vec2(center.x + 200.0, center.y), vec2(center.x + 200.0, center.y - 1000.0), RoadId(1)),
+        Road::new(center, vec2(center.x + 200.0, center.y), RoadId(0)),
+        Road::new(
+            vec2(center.x + 200.0, center.y),
+            vec2(center.x + 200.0, center.y - 1000.0),
+            RoadId(1),
+        ),
     ];
 
     let road_grid = generate_road_grid(20);
     //let road_grid = RoadGrid::new(roads);
 
-    let layers = 
-        vec![ 
-            Layer::new_random(4, 4, Activation::Tanh, rng),
-            Layer::new_random(4, 2, Activation::Tanh, rng)
-        ];
+    let layers = vec![
+        Layer::new_random(4, 4, Activation::Tanh, rng),
+        Layer::new_random(4, 2, Activation::Tanh, rng),
+    ];
     let inputs: Vec<f32> = vec![0.0, 0.5, 0.3, 0.2];
     let network = Network::new(&layers);
 
@@ -155,17 +181,15 @@ fn test_sensors<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
     ]);
 
     Simulation::new(cars, road_grid)
-
 }
-
 
 #[macroquad::main("Simulation Window")]
 async fn main() {
+    const EPOCHS: usize = 100000;
 
     // rng and time var
     let mut rng = ChaCha8Rng::seed_from_u64(42);
     let mut time = 0.0;
-
 
     // Screen and Camera Variables
     let x = screen_width();
@@ -173,8 +197,6 @@ async fn main() {
     let center = vec2(x * 0.5, y * 0.5);
     let base_zoom = vec2(BASE_ZOOM, BASE_ZOOM);
     let screen = vec2(x, y);
-
-
 
     // levels
     let mut levels = vec![
@@ -187,11 +209,10 @@ async fn main() {
     let mut sim = test_sensors(center, screen, &mut rng);
 
     // Neural Network Initialization
-    let layers = 
-        vec![ 
-            Layer::new_random(4, 4, Activation::Tanh, &mut rng),
-            Layer::new_random(4, 2, Activation::Tanh, &mut rng)
-        ];
+    let layers = vec![
+        Layer::new_random(4, 4, Activation::Tanh, &mut rng),
+        Layer::new_random(4, 2, Activation::Tanh, &mut rng),
+    ];
     let inputs: Vec<f32> = vec![0.0, 0.5, 0.3, 0.2];
     let network = Network::new(&layers);
     let network2 = Network::new(&layers);
@@ -203,38 +224,48 @@ async fn main() {
         ..Default::default()
     };
 
-    sim.cars.cars[0].change_state(traffic::cars::CarState::UserControlled(Destination {position: *sim.roads.roads[4].get_first_point()}));
-    sim.cars.cars[1].change_state(traffic::cars::CarState::AIControlled(Destination {position: Vec2::ZERO}));
-    
-
+    sim.cars.cars[0].change_state(traffic::cars::CarState::UserControlled(Destination {
+        position: *sim.roads.roads[4].get_first_point(),
+    }));
+    sim.cars.cars[1].change_state(traffic::cars::CarState::AIControlled(Destination {
+        position: Vec2::ZERO,
+    }));
 
     println!(
-    "Level Description:
+        "Level Description:
      Cars: {:?}
      Roads: {:?}
-     ", sim.cars.cars.iter().map(|x| x.get_id()).collect::<Vec<u16>>(), 
-        sim.roads.roads.iter().map(|x| x.get_id()).collect::<Vec<RoadId>>());
+     ",
+        sim.cars
+            .cars
+            .iter()
+            .map(|x| x.get_id())
+            .collect::<Vec<u16>>(),
+        sim.roads
+            .roads
+            .iter()
+            .map(|x| x.get_id())
+            .collect::<Vec<RoadId>>()
+    );
 
-
-    loop {
-
+    for _ in 1..=EPOCHS {
         handle_input(&mut camera);
         set_camera(&camera);
         clear_background(BEIGE);
 
-        draw_text(format!("Time Elapsed: {:.2}", time).as_str(), camera.target.x - 100.0, camera.target.y - 300.0, 25.0, GREEN);
+        draw_text(
+            format!("Time Elapsed: {:.2}", time).as_str(),
+            camera.target.x - 100.0,
+            camera.target.y - 300.0,
+            25.0,
+            GREEN,
+        );
 
-        sim.draw_sim(true);
         sim.update(true);
-
 
         // Logic for Debugging Sensors
 
-
-
         time += get_frame_time();
-        next_frame().await; 
+        next_frame().await;
     }
-    
 } // End Simulation
-    
