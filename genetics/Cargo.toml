@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-traffic ={ path = "../traffic" }
+traffic = { path = "../traffic" }
+neural = { path = "../neural"}
+rayon = "1.11.0"
