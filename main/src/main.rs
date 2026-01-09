@@ -171,7 +171,6 @@ fn test_sensors<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
         Layer::new_random(4, 4, Activation::Tanh, rng),
         Layer::new_random(4, 2, Activation::Tanh, rng),
     ];
-    let inputs: Vec<f32> = vec![0.0, 0.5, 0.3, 0.2];
     let network = Network::new(&layers);
 
     let cars = CarWorld::new(vec![
@@ -185,8 +184,6 @@ fn test_sensors<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
 
 #[macroquad::main("Simulation Window")]
 async fn main() {
-    const EPOCHS: usize = 100000;
-
     // rng and time var
     let mut rng = ChaCha8Rng::seed_from_u64(42);
     let mut time = 0.0;
@@ -206,6 +203,7 @@ async fn main() {
         build_straight_road_4(center, screen, &mut rng),
         test_sensors(center, screen, &mut rng),
     ];
+    // Pick a Level
     let mut sim = test_sensors(center, screen, &mut rng);
 
     // Neural Network Initialization
@@ -213,9 +211,6 @@ async fn main() {
         Layer::new_random(4, 4, Activation::Tanh, &mut rng),
         Layer::new_random(4, 2, Activation::Tanh, &mut rng),
     ];
-    let inputs: Vec<f32> = vec![0.0, 0.5, 0.3, 0.2];
-    let network = Network::new(&layers);
-    let network2 = Network::new(&layers);
 
     // Camera initialization
     let mut camera = Camera2D {
@@ -247,6 +242,8 @@ async fn main() {
             .map(|x| x.get_id())
             .collect::<Vec<RoadId>>()
     );
+    // This controls how many times the simulation runs before running fitness evaluation
+    const EPOCHS: usize = 100;
 
     for _ in 1..=EPOCHS {
         handle_input(&mut camera);
@@ -261,6 +258,7 @@ async fn main() {
             GREEN,
         );
 
+        sim.draw_sim(false);
         sim.update(true);
 
         // Logic for Debugging Sensors
