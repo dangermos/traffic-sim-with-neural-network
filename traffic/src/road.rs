@@ -1,9 +1,10 @@
 use std::{collections::HashMap, hash::Hash, ops::Index};
 
-use macroquad::{color::{Color, PINK},
-    math::{Vec2},
-    shapes::{draw_circle, draw_line}, 
-    window::{screen_height, screen_width}
+use macroquad::{
+    color::{Color, PINK},
+    math::Vec2,
+    shapes::{draw_circle, draw_line},
+    window::{screen_height, screen_width},
 };
 
 use rand::{Rng, rng};
@@ -25,14 +26,17 @@ pub struct Road {
 
 #[derive(Clone, Debug)]
 pub struct RoadGrid {
-    pub roads: Vec<Road>, // A collection of the roads
-    pub nodes: Vec<Vec2>, // Map from NodeId -> Position of that node
+    pub roads: Vec<Road>,                         // A collection of the roads
+    pub nodes: Vec<Vec2>,                         // Map from NodeId -> Position of that node
     pub next_roads: HashMap<RoadId, Vec<RoadId>>, // Map from RoadId -> Roads that follow
 }
 
 impl RoadGrid {
     pub fn new(mut roads: Vec<Road>) -> Self {
-        assert!(roads.len() > 1, "There needs to be more than 1 road in a RoadGrid!");
+        assert!(
+            roads.len() > 1,
+            "There needs to be more than 1 road in a RoadGrid!"
+        );
 
         let eps = 0.1;
         let mut nodes: Vec<Vec2> = Vec::new();
@@ -40,15 +44,14 @@ impl RoadGrid {
         let mut point_to_node: HashMap<(i32, i32), NodeId> = HashMap::new();
 
         // Helper closure to quantize point
-        let quantize = |p: Vec2| -> (i32, i32) {
-             ((p.x / eps).round() as i32, (p.y / eps).round() as i32)
-        };
+        let quantize =
+            |p: Vec2| -> (i32, i32) { ((p.x / eps).round() as i32, (p.y / eps).round() as i32) };
 
         // First pass: identify nodes and assign to roads
         for road in roads.iter_mut() {
             let start_pt = *road.get_first_point();
             let end_pt = *road.get_last_point();
-            
+
             // Process start point
             let start_key = quantize(start_pt);
             let start_node_id = if let Some(&id) = point_to_node.get(&start_key) {
@@ -101,24 +104,29 @@ impl RoadGrid {
     }
 
     pub fn draw_roads(&self, debug: bool) {
-        self.roads.iter().for_each(
-            |x| draw_road(x, debug)
-        );
+        self.roads.iter().for_each(|x| draw_road(x, debug));
     }
 }
 
 impl Index<RoadId> for RoadGrid {
     type Output = Road;
     fn index(&self, index: RoadId) -> &Self::Output {
-        self.roads.iter().find(
-            |x| x.get_id() == index
-        ).expect(format!("Could not find road {:?} in Road Grid {:?}", index, self.roads.iter().map(|road| road.get_id()).collect::<Vec<RoadId>>()).as_str())
+        self.roads.iter().find(|x| x.get_id() == index).expect(
+            format!(
+                "Could not find road {:?} in Road Grid {:?}",
+                index,
+                self.roads
+                    .iter()
+                    .map(|road| road.get_id())
+                    .collect::<Vec<RoadId>>()
+            )
+            .as_str(),
+        )
     }
 }
 
 impl Road {
     pub fn new(origin: Vec2, end: Vec2, id: RoadId) -> Self {
-
         let mut fin_vector: Vec<Vec2> = Vec::new();
         fin_vector.push(origin.clone());
 
@@ -154,8 +162,12 @@ impl Road {
         }
         fin_vector.push(end.clone());
 
-        Road { points: fin_vector, road_id: id, from: None, to: None}
-
+        Road {
+            points: fin_vector,
+            road_id: id,
+            from: None,
+            to: None,
+        }
     }
 
     pub fn get_id(&self) -> RoadId {
@@ -163,22 +175,31 @@ impl Road {
     }
 
     pub fn get_first_point(&self) -> &Vec2 {
-        self.points.get(0).expect("Attempted to get first point of empty road")
+        self.points
+            .get(0)
+            .expect("Attempted to get first point of empty road")
     }
 
     pub fn get_last_point(&self) -> &Vec2 {
-        self.points.last().expect("Attempted to get last point of empty road")
+        self.points
+            .last()
+            .expect("Attempted to get last point of empty road")
     }
 }
 
 pub fn draw_road(road: &Road, debug: bool) {
-    
-    const THICKNESS: f32 = 60.0; 
+    const THICKNESS: f32 = 60.0;
     const ROAD_COLOR: Color = Color::from_rgba(255, 255, 255, 50);
 
-    let (_start, _end) = (road.points.first().expect("Road Points not Initialized Correctly"),
-                                        road.points.last().expect("Road Points not Initialized Correctly"));
-                        
+    let (_start, _end) = (
+        road.points
+            .first()
+            .expect("Road Points not Initialized Correctly"),
+        road.points
+            .last()
+            .expect("Road Points not Initialized Correctly"),
+    );
+
     // Draw Loop
     for i in 0..road.points.len() - 1 {
         let curr = road.points[i];
@@ -187,19 +208,21 @@ pub fn draw_road(road: &Road, debug: bool) {
         draw_line(curr.x, curr.y, next.x, next.y, THICKNESS, ROAD_COLOR);
 
         if debug {
-            draw_circle(road.points.last().unwrap().x, road.points.last().unwrap().y, 10.0, PINK);
+            draw_circle(
+                road.points.last().unwrap().x,
+                road.points.last().unwrap().y,
+                10.0,
+                PINK,
+            );
         }
     }
 }
 
-pub fn generate_road_grid(roads: u16) -> RoadGrid {
-
+pub fn generate_road_grid(roads: u16, mut rng: impl Rng) -> RoadGrid {
     // Roughly split requested roads into a Manhattan-style grid of vertical and horizontal streets.
     let total = roads.max(4) as usize;
     let vertical_count = (total / 2).max(2);
     let horizontal_count = total - vertical_count; // guaranteed >= 2 because total >= 4
-
-    let mut rng = rng();
 
     // Space lines across a "city" that is much larger than the current viewport.
     let max_axis = vertical_count.max(horizontal_count) as f32;
@@ -302,11 +325,17 @@ mod tests {
 
         // Road 1 end connects to nothing in this set
         let next_r1 = grid.next_roads.get(&RoadId(1));
-        assert!(next_r1.is_none() || next_r1.unwrap().is_empty(), "Road 1 should not lead anywhere");
+        assert!(
+            next_r1.is_none() || next_r1.unwrap().is_empty(),
+            "Road 1 should not lead anywhere"
+        );
 
         // Road 2 connects to nothing
         let next_r2 = grid.next_roads.get(&RoadId(2));
-         assert!(next_r2.is_none() || next_r2.unwrap().is_empty(), "Road 2 should not lead anywhere");
+        assert!(
+            next_r2.is_none() || next_r2.unwrap().is_empty(),
+            "Road 2 should not lead anywhere"
+        );
 
         // What about roads starting at the same node?
         // r0 starts at (0,0). r2 starts at (0,0).
@@ -326,7 +355,10 @@ mod tests {
 
         let grid = RoadGrid::new(vec![r0, r1, r2]);
 
-        let next_r0 = grid.next_roads.get(&RoadId(0)).expect("Road 0 should have outgoing roads");
+        let next_r0 = grid
+            .next_roads
+            .get(&RoadId(0))
+            .expect("Road 0 should have outgoing roads");
         assert!(next_r0.contains(&RoadId(1)));
         assert!(next_r0.contains(&RoadId(2)));
         assert_eq!(next_r0.len(), 2);

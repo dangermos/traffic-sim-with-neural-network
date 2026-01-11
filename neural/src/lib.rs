@@ -8,14 +8,13 @@ pub struct LayerTopology {
 
 #[derive(Debug)]
 pub struct Network {
-    layers: Vec<Layer>
+    layers: Vec<Layer>,
 }
 
 impl Network {
-
     pub fn new(layers: &Vec<Layer>) -> Self {
         Self {
-            layers: layers.to_vec()
+            layers: layers.to_vec(),
         }
     }
 
@@ -23,11 +22,59 @@ impl Network {
         assert!(layers.len() > 1);
         let layers = layers
             .windows(2)
-            .map(|layers| Layer::new_random(layers[0].neurons, layers[1].neurons, Activation::ReLU, rng))
+            .map(|layers| {
+                Layer::new_random(layers[0].neurons, layers[1].neurons, Activation::Tanh, rng)
+            })
             .collect();
 
         Self { layers }
-        
+    }
+
+    pub fn to_genes(&self) -> Vec<f32> {
+        let mut genes = Vec::new();
+        for layer in &self.layers {
+            for neuron in &layer.neurons {
+                genes.push(neuron.bias);
+                genes.extend(&neuron.weights);
+            }
+        }
+        genes
+    }
+
+    pub fn from_genes(topology: &[LayerTopology], genes: &[f32]) -> Self {
+        assert!(topology.len() > 1);
+        let mut index = 0;
+        let layers = topology
+            .windows(2)
+            .map(|layers| {
+                let input_size = layers[0].neurons;
+                let output_size = layers[1].neurons;
+                let neurons = (0..output_size)
+                    .map(|_| {
+                        let bias = genes[index];
+                        index += 1;
+                        let weights = genes[index..index + input_size].to_vec();
+                        index += input_size;
+                        Neuron { bias, weights }
+                    })
+                    .collect();
+                Layer {
+                    neurons,
+                    activation_function: Activation::Tanh,
+                }
+            })
+            .collect();
+
+        Self { layers }
+    }
+
+    pub fn gene_count(&self) -> usize {
+        self.layers
+            .iter()
+            .map(|layer| {
+                layer.neurons.len() * (layer.neurons.first().map_or(0, |n| n.weights.len()) + 1)
+            })
+            .sum()
     }
 
     pub fn propagate(&self, inputs: Vec<f32>) -> Vec<f32> {
@@ -39,7 +86,9 @@ impl Network {
 
 impl Clone for Network {
     fn clone(&self) -> Self {
-        Self { layers: self.layers.clone() }
+        Self {
+            layers: self.layers.clone(),
+        }
     }
 }
 
@@ -50,34 +99,39 @@ pub struct Layer {
 }
 
 impl Layer {
-
-    pub fn new_random<R: Rng + ?Sized>(input_size: usize, output_size: usize, activation_function: Activation, rng: &mut R) -> Self {
+    pub fn new_random<R: Rng + ?Sized>(
+        input_size: usize,
+        output_size: usize,
+        activation_function: Activation,
+        rng: &mut R,
+    ) -> Self {
         let neurons = (0..output_size)
             .map(|_| Neuron::new_random(input_size, rng))
             .collect();
-    
-        Self { neurons, activation_function }
+
+        Self {
+            neurons,
+            activation_function,
+        }
     }
 
-    fn propagate(&self, mut inputs: Vec<f32>) -> Vec<f32> {
+    fn propagate(&self, inputs: Vec<f32>) -> Vec<f32> {
         self.neurons
             .iter()
             .map(|x| x.propagate(&inputs, self.activation_function))
-            .collect() 
+            .collect()
     }
-
 }
 #[derive(Debug, Clone)]
 /// Neuron of a Neural Network.
 /// Bias is a single f32 while weights is a dynamic Vec of f32's.
-/// This is because a neuron gets a weight per input to the neuron. 
+/// This is because a neuron gets a weight per input to the neuron.
 pub struct Neuron {
-    weights: Vec<f32>, 
+    weights: Vec<f32>,
     bias: f32,
 }
 
 impl Neuron {
-
     fn propagate(&self, inputs: &Vec<f32>, activation_function: Activation) -> f32 {
         assert_eq!(inputs.len(), self.weights.len());
 
@@ -91,7 +145,6 @@ impl Neuron {
     }
 
     fn new_random<R: Rng + ?Sized>(input_size: usize, rng: &mut R) -> Self {
-
         let bias = rng.random_range(-1.0..1.0);
 
         let weights = (0..input_size)
@@ -101,7 +154,6 @@ impl Neuron {
         Self { bias, weights }
     }
 }
-
 
 #[derive(Debug, Clone, Copy)]
 pub enum Activation {
@@ -119,7 +171,13 @@ impl Activation {
         match self {
             Activation::Linear => x,
             Activation::ReLU => x.max(0.0),
-            Activation::LeakyReLU(a) => if x > 0.0 { x } else { a * x },
+            Activation::LeakyReLU(a) => {
+                if x > 0.0 {
+                    x
+                } else {
+                    a * x
+                }
+            }
             Activation::Sigmoid => 1.0 / (1.0 + (-x).exp()),
             Activation::Tanh => x.tanh(),
             Activation::Softsign => x / (1.0 + x.abs()),
@@ -160,7 +218,11 @@ impl fmt::Display for Network {
 
 impl fmt::Display for Layer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let input_size = self.neurons.first().map(|neuron| neuron.weights.len()).unwrap_or(0);
+        let input_size = self
+            .neurons
+            .first()
+            .map(|neuron| neuron.weights.len())
+            .unwrap_or(0);
         write!(
             f,
             "Layer(inputs={}, outputs={}, activation={})",
@@ -217,24 +279,19 @@ mod tests {
 
     #[test]
     fn test_new_network() {
-
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let layers = 
-        vec![
+        let layers = vec![
             Layer::new_random(4, 4, Activation::Tanh, &mut rng),
-            Layer::new_random(4, 2, Activation::Tanh, &mut rng)
+            Layer::new_random(4, 2, Activation::Tanh, &mut rng),
         ];
 
-        let network = Network {layers};
-
+        let network = Network { layers };
 
         let inputs: Vec<f32> = vec![0.0, 0.5, 3.2, 1.2];
 
         network.propagate(inputs);
 
         println!("Network: {}", network);
-
-        
     }
 }
