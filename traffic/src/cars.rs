@@ -1,14 +1,10 @@
-use ::rand::{Rng, distr::uniform::SampleRange};
+use ::rand::Rng;
 use core::f32;
-use std::{
-    cmp::{self, Ordering, max},
-    collections::HashSet,
-    vec,
-};
+use std::{cmp::Ordering, vec};
 
 use crate::{
-    road::{self, RoadGrid, RoadId},
-    simulation::{CarObs, Object, Simulation},
+    road::{RoadGrid, RoadId},
+    simulation::CarObs,
 };
 use macroquad::prelude::*;
 use neural::{Activation, Layer, Network};
@@ -98,7 +94,7 @@ pub struct Car {
 
     /// This measures how obstructed the car is, as in how 'clear' the front of the car is using a collection of rays
     obstruction_score: f32,
-    obstruction_rays: Option<Vec<Ray>>,
+    obstruction_rays: Vec<Ray>,
 
     /// This measures the distance of the current car to it's destination
     distance_to_destination: f32,
@@ -115,6 +111,7 @@ pub struct Car {
     pub time_spent_alive: f32,
     pub time_spent_off_road: f32,
     pub progress_to_goal: f32,
+    pub distance_traveled: f32,
 }
 
 impl Default for Car {
@@ -134,10 +131,11 @@ impl Default for Car {
             goal_align: 0.0,
             heading_error: 0.0,
             network: Network::new(&vec![]),
-            obstruction_rays: None,
+            obstruction_rays: Vec::new(),
             time_spent_alive: 0.0,
             time_spent_off_road: 0.0,
             progress_to_goal: 0.0,
+            distance_traveled: 0.0,
         }
     }
 }
@@ -193,49 +191,50 @@ impl Car {
 
     /// Spawns a Car on a Road with given `road_id`
     pub fn new_on_road(
-        road_grid: &RoadGrid,
-        road_id: RoadId,
-        color: Color,
-        network: Network,
-        car_id: u16,
-    ) -> Self {
-        let position = *road_grid[road_id].get_first_point();
-        let rotation = 0.0;
+            road_grid: &RoadGrid,
+            road_id: RoadId,
+            color: Color,
+            network: Network,
+            car_id: u16,
+        ) -> Self {
+            let mut rng = ::rand::rng();
 
-        let mut rng = ::rand::rng();
+            let viable: Vec<&Vec2> = road_grid
+                .roads
+                .iter()
+                .map(|x| x.get_first_point())
+                .filter(|x| **x != vec2(0.0, 0.0))
+                .collect();
 
-        let viable: Vec<&Vec2> = road_grid
-            .roads
-            .iter()
-            .map(|x| x.get_first_point())
-            .filter(|x| **x != vec2(0.0, 0.0))
-            .collect();
+            let position =
+                road_grid[road_id].points[rng.random_range(0..road_grid[road_id].points.len())];
+            let rotation = 0.0;
 
-        let mut rand_dest = *viable[rng.random_range(0..viable.len())];
+            let mut rand_dest = *viable[rng.random_range(0..viable.len())];
 
-        while rand_dest == position {
-            // Makes sure the destination is not just where the car started
-            rand_dest = *viable[rng.random_range(0..viable.len())];
+            while rand_dest == position {
+                // Makes sure the destination is not just where the car started
+                rand_dest = *viable[rng.random_range(0..viable.len())];
+            }
+
+            let destination = Some(Destination {
+                position: rand_dest,
+            });
+
+            let state = CarState::AIControlled(destination.unwrap_or(Destination { position }));
+
+            Self {
+                position,
+                rotation,
+                car_id,
+                road_id,
+                state,
+                color,
+                network,
+                destination,
+                ..Default::default()
+            }
         }
-
-        let destination = Some(Destination {
-            position: rand_dest,
-        });
-
-        let state = CarState::AIControlled(destination.unwrap_or(Destination { position }));
-
-        Self {
-            position,
-            rotation,
-            car_id,
-            road_id,
-            state,
-            color,
-            network,
-            destination,
-            ..Default::default()
-        }
-    }
 
     pub fn get_id(&self) -> u16 {
         self.car_id
@@ -271,13 +270,9 @@ impl Car {
         }
     }
 
-    pub fn update<'a>(
-        &'a mut self,
-        road_grid: &'a RoadGrid,
-        objects: &HashSet<CarObs>,
-        debug: bool,
-    ) {
+    pub fn update<'a>(&'a mut self, road_grid: &'a RoadGrid, objects: &[CarObs], debug: bool) {
         let prev_distance = self.distance_to_destination;
+
 
         for object in objects {
             if self.car_id == object.id {
@@ -292,7 +287,7 @@ impl Car {
         }
 
         // Obstruction handling
-        self.obstruction_rays = Some(self.calculate_obstruction_rays());
+        self.calculate_obstruction_rays();
         self.obstruction_score = self.get_obstruction_score(objects);
 
         // On-Road Score
@@ -310,7 +305,7 @@ impl Car {
         self.heading_error = self.heading_error(road_grid);
 
         if self.on_roadness < 1.0 {
-            self.time_spent_off_road += get_frame_time() * (1.0 - self.on_roadness);
+            self.time_spent_off_road += 1.0 * (1.0 - self.on_roadness);
         }
 
         if self.destination.is_some() {
@@ -320,7 +315,6 @@ impl Car {
 
         match &self.state {
             CarState::IDLE => {
-                self.time_spent_alive += get_frame_time();
             }
 
             CarState::MovingToDestinationAuto(destination) => {
@@ -383,7 +377,7 @@ impl Car {
                     println!("No Roads found on Grid.");
                 }
 
-                self.time_spent_alive += get_frame_time();
+                self.time_spent_alive += 1.0;
             }
 
             CarState::AIControlled(destination) => {
@@ -415,10 +409,12 @@ impl Car {
 
                 self.speed = (self.speed + throttle * ACCELERATION * dt).clamp(0.0, MAX_SPEED);
                 self.rotation += steering * MAX_ANGULAR_VELOCITY * dt;
+                self.distance_traveled += self.speed * dt;
+                
 
                 // println!("Hi from car {}, I've been alive for {:.0} seconds", self.get_id(), self.time_spent_alive);
 
-                self.time_spent_alive += get_frame_time();
+                self.time_spent_alive += 1.0;
             }
 
             CarState::UserControlled(destination) => {
@@ -438,7 +434,7 @@ impl Car {
 
                 if debug {}
 
-                self.time_spent_alive += get_frame_time();
+                self.time_spent_alive += 1.0;
             }
 
             CarState::ReachedDestination => {
@@ -452,7 +448,7 @@ impl Car {
     }
 
     fn rotate_car(&mut self, amount: f32) {
-        self.rotation += amount * get_frame_time()
+        self.rotation += amount * 1.0
     }
 
     fn move_car(&mut self, _debug: bool) {
@@ -508,28 +504,27 @@ impl Car {
     }
 
     // Sensor Calculation Helpers
-    pub fn calculate_obstruction_rays(&self) -> Vec<Ray> {
+    pub fn calculate_obstruction_rays(&mut self) {
         let dims = vec2(30.0, 10.0);
 
         let angles: [f32; 5] = [-0.4, -0.1, 0.0, 0.1, 0.4]; // radians
 
-        let mut rays = Vec::new();
+        self.obstruction_rays.clear();
+        self.obstruction_rays.reserve_exact(angles.len().saturating_sub(self.obstruction_rays.len()));
 
         for a in angles {
             let origin_local = vec2(dims.x * 0.5, 0.0); // front from center
             let start = self.world_from_local(origin_local);
             let end = start + rotate(vec2(200.0 * a.cos().powi(5), 0.0), self.rotation + a);
 
-            rays.push(Ray(start, end));
+            self.obstruction_rays.push(Ray(start, end));
         }
-
-        rays
     }
 
-    pub fn get_obstruction_score(&self, objects: &HashSet<CarObs>) -> f32 {
+    pub fn get_obstruction_score(&self, objects: &[CarObs]) -> f32 {
         let mut ray_scores: [f32; 5] = [0.0; 5];
 
-        for (idx, ray) in self.obstruction_rays.as_ref().unwrap().iter().enumerate() {
+        for (idx, ray) in self.obstruction_rays.iter().enumerate() {
             // Every Car has 5 obstruction rays
 
             let mut closest_obstruction: f32 = 0.0;
@@ -725,18 +720,14 @@ pub fn draw_car(car: &Car, debug: bool) {
 
     if debug {
         fn draw_obstruction_rays(car: &Car) {
-            if car.obstruction_rays.is_some() {
-                let rays = car.obstruction_rays.as_ref().unwrap();
+            let rays = &car.obstruction_rays;
 
-                let color = car.color.with_alpha(0.5);
+            let color = car.color.with_alpha(0.5);
 
-                for (idx, i) in rays.iter().enumerate() {
-                    draw_line(i.0.x, i.0.y, i.1.x, i.1.y, 3.0, color);
-                    draw_circle_lines(i.1.x, i.1.y, 10.0, 3.0, color);
-                    draw_text(format!("{}", idx).as_str(), i.1.x, i.1.y, 34.0, GREEN);
-                }
-            } else {
-                return;
+            for (idx, i) in rays.iter().enumerate() {
+                draw_line(i.0.x, i.0.y, i.1.x, i.1.y, 3.0, color);
+                draw_circle_lines(i.1.x, i.1.y, 10.0, 3.0, color);
+                draw_text(format!("{}", idx).as_str(), i.1.x, i.1.y, 34.0, GREEN);
             }
         }
 

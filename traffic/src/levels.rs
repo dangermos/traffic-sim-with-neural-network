@@ -109,16 +109,11 @@ pub fn build_straight_road_4<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) ->
 }
 
 pub fn test_sensors<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
-    let roads = vec![
-        Road::new(center, vec2(center.x + 200.0, center.y), RoadId(0)),
-        Road::new(
-            vec2(center.x + 200.0, center.y),
-            vec2(center.x + 200.0, center.y - 1000.0),
-            RoadId(1),
-        ),
-    ];
 
-    let road_grid = generate_road_grid(20);
+    const NUM_ROADS: usize = 20;
+    const NUM_CARS: usize = 100;
+
+    let road_grid = generate_road_grid(NUM_ROADS, rng);
     //let road_grid = RoadGrid::new(roads);
 
     let layers = vec![
@@ -127,11 +122,16 @@ pub fn test_sensors<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulati
     ];
     let network = Network::new(&layers);
 
-    let cars = CarWorld::new(vec![
-        Car::new_on_road(&road_grid, RoadId(0), GRAY, network.clone(), 0),
-        Car::new_on_road(&road_grid, RoadId(1), PINK, network.clone(), 1),
-        //Car::new(vec2(0.0, 0.0), GREEN, network.clone(), 2),
-    ]);
+
+    let cars = CarWorld { cars:
+        (0..NUM_CARS).map(|x| {
+                Car::new_on_road(&road_grid, RoadId(x % NUM_ROADS), GRAY, network.clone(), x as u16)
+            })
+        .collect()
+    };
+        //Car::new_on_road(&road_grid, RoadId(1), PINK, network.clone(), 1),
+
+
 
     Simulation::new(cars, road_grid)
 }

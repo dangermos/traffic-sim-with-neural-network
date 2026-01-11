@@ -1,13 +1,9 @@
-use ::rand::{Rng, SeedableRng};
-use genetics::{Individual, Population, evolve_generation, tournament_select};
+use genetics::{Individual, Population};
 use macroquad::prelude::*;
+use ::rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use traffic::{
-    cars::{Car, CarWorld, Destination},
-    levels::test_sensors,
-    road::{Road, RoadGrid, RoadId, generate_road_grid},
-    simulation::Simulation,
-};
+use bincode::{serialize, deserialize};
+use traffic::levels::test_sensors;
 
 const BASE_ZOOM: f32 = 0.003;
 fn handle_input(camera: &mut Camera2D) {
@@ -56,51 +52,29 @@ fn handle_input(camera: &mut Camera2D) {
     }
 }
 
+
+
+
+
+
+
 #[macroquad::main("Simulation Window")]
 async fn main() {
-    // rng and time var
-    let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-    // Screen and Camera Variables
-    let x = screen_width();
-    let y = screen_height();
+
+    let mut rng = ChaCha8Rng::seed_from_u64(42);
+    // Size Variables
+    let x = 1920.0;
+    let y = 1080.0;
     let center = vec2(x * 0.5, y * 0.5);
-    let base_zoom = vec2(BASE_ZOOM, BASE_ZOOM);
     let screen = vec2(x, y);
 
-    // Pick a Level
+    let base_zoom = vec2(BASE_ZOOM, BASE_ZOOM);
+
     let mut sim = test_sensors(center, screen, &mut rng);
 
-    // Camera initialization
-    let mut camera = Camera2D {
-        target: center,
-        zoom: base_zoom,
-        ..Default::default()
-    };
 
-    println!(
-        "Level Description:
-     Cars: {:?}
-     Roads: {:?}
-     ",
-        sim.cars
-            .cars
-            .iter()
-            .map(|x| x.get_id())
-            .collect::<Vec<u16>>(),
-        sim.roads
-            .roads
-            .iter()
-            .map(|x| x.get_id())
-            .collect::<Vec<RoadId>>()
-    );
-    // This controls how many times the simulation runs before running fitness evaluation
-    const EPOCHS: usize = 5;
-    const MAX_FRAMES: usize = 500;
-
-    const DRAW: bool = true;
-
-    let individuals: Vec<Individual> = sim
+    let initial_individuals: Vec<Individual> = sim
         .cars
         .cars
         .iter()
@@ -111,29 +85,53 @@ async fn main() {
         })
         .collect();
 
+    let expected_pop_size = initial_individuals.len();
+
+    let checkpoint_path = "individuals.bin";
+    let i = if std::path::Path::new(checkpoint_path).exists() {
+        let data = std::fs::read(checkpoint_path).expect("Failed to read checkpoint file");
+        let individuals: Vec<Individual> =
+            deserialize(&data).expect("Failed to deserialize individuals");
+        if individuals.len() != expected_pop_size {
+            panic!(
+                "Checkpoint population size {} does not match expected size {}",
+                individuals.len(),
+                expected_pop_size
+            );
+        }
+        individuals
+    } else {
+        initial_individuals
+    };
+
     let mut population = Population {
-        individuals,
+        individuals: i,
         generation: 0,
     };
 
-    for generation in 0..EPOCHS {
-        for frame in 0..MAX_FRAMES {
-            if DRAW {
-                handle_input(&mut camera);
-                set_camera(&camera);
-                clear_background(BEIGE);
-                sim.draw_sim(false);
-            }
 
-            sim.update(true);
+    
+    let mut sim = traffic::levels::test_sensors(
+        vec2(screen_width() * 0.5, screen_height() * 0.5),
+        vec2(screen_width(), screen_height()),
+        &mut rng,
+    );
 
-            // Logic for Debugging Sensors
-            if DRAW {
-                next_frame().await;
-            }
-            println!("Frame {}", frame);
-        }
+    // Camera initialization
+    let mut camera = Camera2D {
+        target: sim.cars.cars[0].position,
+        zoom: base_zoom,
+        ..Default::default()
+    };
 
-        let new = evolve_generation(&population, 3, 0.2, 0.2, &mut rng);
+
+    loop {
+        handle_input(&mut camera);
+        set_camera(&camera);
+        clear_background(BEIGE);
+        sim.draw_sim(true);
+        sim.update(true);
+        // Yield to the macroquad event loop so the window can redraw.
+        next_frame().await;
     }
-} // End Simulation
+}

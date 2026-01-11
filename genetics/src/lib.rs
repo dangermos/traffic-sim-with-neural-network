@@ -1,10 +1,12 @@
-use ::rand::Rng;
+use ::rand::{Rng, rngs::SmallRng, SeedableRng};
 use bincode::Serializer;
+use macroquad::color::Color;
 use neural::{LayerTopology, Network};
 use serde::{Deserialize, Serialize};
+use rayon::prelude::*;
 use traffic::{
     cars::{Car, CarState, CarWorld},
-    road::{RoadGrid, generate_road_grid},
+    road::{RoadGrid, RoadId, generate_road_grid},
     simulation::Simulation,
 };
 
@@ -22,10 +24,11 @@ The loop for neuroevolution is
 
 */
 
-const PROGRESS_REWARD: f32 = 10.0;
+const PROGRESS_REWARD: f32 = 2.0;
 const TIME_REWARD: f32 = 0.1;
 const OFF_ROAD_PENALTY: f32 = 0.9;
 const CRASH_PENALTY: f32 = 0.4;
+const STAGNANT_PENALTY: f32 = 0.95;
 
 pub struct EvolutionConfig {
     population_size: usize,
@@ -56,6 +59,10 @@ pub fn fitness(car: &Car) -> f32 {
     fitness += car.progress_to_goal * PROGRESS_REWARD;
     fitness += car.time_spent_alive * TIME_REWARD;
     fitness -= car.time_spent_off_road * OFF_ROAD_PENALTY;
+    
+    if car.distance_traveled < 10.0 {
+        fitness *= STAGNANT_PENALTY;
+    }
 
     match car.state() {
         CarState::Crashed => fitness *= CRASH_PENALTY,
@@ -89,19 +96,32 @@ pub fn evolve_generation<R: Rng>(
 
     next_gen.extend(sorted.iter().take(n).cloned());
 
-    while next_gen.len() < sorted.len() {
-        let parent = tournament_select(&sorted, 3, rng);
-        let mut child_genes = parent.genes.clone();
-        mutate(&mut child_genes, mutation_rate, mutation_strength, rng);
-        next_gen.push(Individual {
-            genes: child_genes,
-            fitness: 0.0,
-        });
-    }
+    let rest = sorted.len().saturating_sub(n);
 
+    // Seed per-child RNGs deterministically from the passed-in RNG so runs remain reproducible.
+    let seeds: Vec<u64> = (0..rest).map(|_| rng.random()).collect();
+
+    let children: Vec<Individual> = seeds
+        .into_par_iter()
+        .map(|seed| {
+            // SmallRng is faster to initialize per task than StdRng.
+            let mut local_rng = SmallRng::seed_from_u64(seed);
+            let parent = tournament_select(&sorted, 3, &mut local_rng);
+            let mut child_genes = parent.genes.clone();
+            mutate(&mut child_genes, mutation_rate, mutation_strength, &mut local_rng);
+            Individual {
+                genes: child_genes,
+                fitness: 0.0,
+            }
+        })
+        .collect();
+
+    next_gen.extend(children);
+
+    let generation = population.generation + 1;
     Population {
         individuals: next_gen,
-        generation: population.generation + 1,
+        generation,
     }
 }
 
@@ -137,12 +157,72 @@ pub fn tournament_select<'from_population, R: Rng>(
 
 pub fn make_sim_from_population<R: Rng>(population: &Population, rng: &mut R) -> Simulation {
     let road_grid = generate_road_grid(20, rng);
+    make_sim_from_population_with_grid(population, &road_grid, rng)
+}
+
+pub fn make_sim_from_population_with_grid<R: Rng>(
+    population: &Population,
+    road_grid: &RoadGrid,
+    rng: &mut R,
+) -> Simulation {
+
+    let road_count = road_grid.roads.len().max(1);
 
     let cars = CarWorld::new(
-   	population.individuals.iter().enumerate().map(|(i, indiv)| {
-    	let toplogy: [LayerTopology; 2] = [LayerTopology {neurons: 5}, LayerTopology {neurons: 2}];
-    	let net = Network::from_genes(topology, &indiv.genes);
-     	Car::new_on_road(&road_grid, road_id, color, network, car_id)
-    })
-    )
+        population
+            .individuals
+            .iter()
+            .enumerate()
+            .map(|(i, indiv)| {
+                const INPUTS: usize = 5;
+                const OUTPUTS: usize = 2;
+
+                // Infer a reasonable topology from the genes while matching the car's
+                // expected input/output sizes.
+                let topology: Vec<LayerTopology> = {
+                    let direct_count = OUTPUTS * (INPUTS + 1);
+                    if indiv.genes.len() == direct_count {
+                        vec![
+                            LayerTopology { neurons: INPUTS },
+                            LayerTopology { neurons: OUTPUTS },
+                        ]
+                    } else {
+                        const MAX_HIDDEN: usize = 64;
+                        let mut matched = None;
+                        for hidden in 1..=MAX_HIDDEN {
+                            let needed = hidden * (INPUTS + 1) + OUTPUTS * (hidden + 1);
+                            if needed == indiv.genes.len() {
+                                matched = Some(hidden);
+                                break;
+                            }
+                        }
+
+                        let hidden = matched.unwrap_or_else(|| {
+                            let denom = INPUTS + OUTPUTS + 1; // 8
+                            ((indiv.genes.len().saturating_sub(OUTPUTS)) / denom)
+                                .clamp(1, MAX_HIDDEN)
+                        });
+
+                        vec![
+                            LayerTopology { neurons: INPUTS },
+                            LayerTopology { neurons: hidden },
+                            LayerTopology { neurons: OUTPUTS },
+                        ]
+                    }
+                };
+
+                let network = Network::from_genes(&topology, &indiv.genes);
+
+                let (r, g, b, _a): (u8, u8, u8, u8) = rng.random();
+                let color = Color::from_rgba(r, g, b, 255);
+
+                let road_id = RoadId(i % road_count);
+                let car_id = i as u16;
+
+                Car::new_on_road(road_grid, road_id, color, network, car_id)
+            })
+            .collect(),
+    );
+
+    Simulation::new(cars, road_grid.clone())
 }

@@ -4,10 +4,9 @@ use macroquad::{
     color::{Color, PINK},
     math::Vec2,
     shapes::{draw_circle, draw_line},
-    window::{screen_height, screen_width},
 };
 
-use rand::{Rng, rng};
+use rand::Rng;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub usize);
@@ -111,17 +110,13 @@ impl RoadGrid {
 impl Index<RoadId> for RoadGrid {
     type Output = Road;
     fn index(&self, index: RoadId) -> &Self::Output {
-        self.roads.iter().find(|x| x.get_id() == index).expect(
-            format!(
-                "Could not find road {:?} in Road Grid {:?}",
+        self.roads.get(index.0).unwrap_or_else(|| {
+            panic!(
+                "Could not find road {:?} in Road Grid; max index is {}",
                 index,
-                self.roads
-                    .iter()
-                    .map(|road| road.get_id())
-                    .collect::<Vec<RoadId>>()
+                self.roads.len().saturating_sub(1)
             )
-            .as_str(),
-        )
+        })
     }
 }
 
@@ -218,7 +213,7 @@ pub fn draw_road(road: &Road, debug: bool) {
     }
 }
 
-pub fn generate_road_grid(roads: u16, mut rng: impl Rng) -> RoadGrid {
+pub fn generate_road_grid<R: Rng>(roads: usize, rng: &mut R) -> RoadGrid {
     // Roughly split requested roads into a Manhattan-style grid of vertical and horizontal streets.
     let total = roads.max(4) as usize;
     let vertical_count = (total / 2).max(2);
@@ -262,9 +257,9 @@ pub fn generate_road_grid(roads: u16, mut rng: impl Rng) -> RoadGrid {
         positions
     }
 
-    let city_center = Vec2::new(screen_width() * 0.5, screen_height() * 0.5);
-    let xs = line_positions(vertical_count, half_span, jitter_fraction, &mut rng);
-    let ys = line_positions(horizontal_count, half_span, jitter_fraction, &mut rng);
+    let city_center = Vec2::new(1920.0 * 0.5, 1080.0 * 0.5);
+    let xs = line_positions(vertical_count, half_span, jitter_fraction, rng);
+    let ys = line_positions(horizontal_count, half_span, jitter_fraction, rng);
 
     let mut generated: Vec<Road> = Vec::with_capacity(vertical_count + horizontal_count);
     let mut id: usize = 0;
