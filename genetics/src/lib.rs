@@ -89,7 +89,7 @@ pub fn evolve_generation<R: Rng>(
     rng: &mut R,
 ) -> Population {
     let mut sorted = population.individuals.clone();
-    sorted.sort_by(|a, b| a.fitness.total_cmp(&b.fitness));
+    sorted.sort_by(|a, b| b.fitness.total_cmp(&a.fitness));
 
     let n = elitism.min(sorted.len());
     let mut next_gen = Vec::with_capacity(sorted.len());

@@ -42,11 +42,12 @@ fn main() {
     
 
     // This controls how many times the simulation runs before running fitness evaluation
-    const EPOCHS: usize = 20;
-    const MAX_FRAMES: usize = 2000;
+    const EPOCHS: usize = 20000;
+    const MAX_FRAMES: usize = 5000;
 
 
-    let initial_individuals: Vec<Individual> = sim
+    let initial_individuals: Vec<Individual> = 
+        sim
         .cars
         .cars
         .iter()

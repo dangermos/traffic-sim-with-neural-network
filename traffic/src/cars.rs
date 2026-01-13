@@ -172,7 +172,7 @@ impl Ray {
 }
 
 fn manhattan_distance(v1: &Vec2, v2: &Vec2) -> f32 {
-    (v2.x - v1.x).abs() - (v2.y - v1.y).abs()
+    (v2.x - v1.x).abs() + (v2.y - v1.y).abs()
 }
 
 impl Car {
@@ -410,6 +410,7 @@ impl Car {
                 self.speed = (self.speed + throttle * ACCELERATION * dt).clamp(0.0, MAX_SPEED);
                 self.rotation += steering * MAX_ANGULAR_VELOCITY * dt;
                 self.distance_traveled += self.speed * dt;
+                self.move_car(debug);
                 
 
                 // println!("Hi from car {}, I've been alive for {:.0} seconds", self.get_id(), self.time_spent_alive);
