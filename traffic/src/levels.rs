@@ -2,7 +2,7 @@ use macroquad::{
     color::{GRAY, PINK},
     math::{Vec2, vec2},
 };
-use neural::{Activation, Layer, Network};
+use neural::{LayerTopology, Network};
 use rand::Rng;
 
 use crate::{
@@ -116,16 +116,17 @@ pub fn test_sensors<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulati
     let road_grid = generate_road_grid(NUM_ROADS, rng);
     //let road_grid = RoadGrid::new(roads);
 
-    let layers = vec![
-        Layer::new_random(5, 5, Activation::Tanh, rng),
-        Layer::new_random(5, 2, Activation::Tanh, rng),
+    let topology = [
+        LayerTopology { neurons: 5 },
+        LayerTopology { neurons: 5 },
+        LayerTopology { neurons: 2 },
     ];
-    let network = Network::new(&layers);
 
 
     let cars = CarWorld { cars:
         (0..NUM_CARS).map(|x| {
-                Car::new_on_road(&road_grid, RoadId(x % NUM_ROADS), GRAY, network.clone(), x as u16)
+                let network = Network::new_random(&topology, rng);
+                Car::new_on_road(&road_grid, RoadId(x % NUM_ROADS), GRAY, network, x as u16)
             })
         .collect()
     };

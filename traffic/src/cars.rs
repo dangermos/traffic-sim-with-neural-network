@@ -7,7 +7,7 @@ use crate::{
     simulation::CarObs,
 };
 use macroquad::prelude::*;
-use neural::{Activation, Layer, Network};
+use neural::{LayerTopology, Network};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Destination {
@@ -33,30 +33,34 @@ impl CarWorld {
     }
 
     pub fn new_random<T: Rng>(num_cars: i32, road_grid: &RoadGrid, rng: &mut T) -> Self {
-        let layers = vec![
-            Layer::new_random(4, 4, Activation::Tanh, rng),
-            Layer::new_random(4, 2, Activation::Tanh, rng),
+        const INPUTS: usize = 5;
+        const HIDDEN: usize = 5;
+        const OUTPUTS: usize = 2;
+
+        let topology = [
+            LayerTopology { neurons: INPUTS },
+            LayerTopology { neurons: HIDDEN },
+            LayerTopology { neurons: OUTPUTS },
         ];
 
-        let networks: Vec<Network> = (0..num_cars).map(|_| Network::new(&layers)).collect();
+        let road_count = road_grid.roads.len();
 
-        let cars: CarWorld = CarWorld::new(
-            (0..num_cars)
-                .into_iter()
-                .map(|x| {
-                    let (r, g, b, _a): (u8, u8, u8, u8) = rng.random();
-                    Car::new_on_road(
-                        road_grid,
-                        RoadId(x as usize % (road_grid.roads.len())),
-                        Color::from_rgba(r, g, b, 255),
-                        networks[x as usize].clone(),
-                        x as u16,
-                    )
-                })
-                .collect(),
-        );
+        let cars = (0..num_cars)
+            .into_iter()
+            .map(|x| {
+                let (r, g, b, _a): (u8, u8, u8, u8) = rng.random();
+                let network = Network::new_random(&topology, rng);
+                Car::new_on_road(
+                    road_grid,
+                    RoadId(x as usize % road_count),
+                    Color::from_rgba(r, g, b, 255),
+                    network,
+                    x as u16,
+                )
+            })
+            .collect();
 
-        cars
+        CarWorld::new(cars)
     }
 
     pub fn draw_cars(&self, debug: bool) {

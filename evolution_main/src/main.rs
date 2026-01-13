@@ -4,9 +4,44 @@ use genetics::{evolve_generation, make_sim_from_population_with_grid, Individual
 use macroquad::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use std::path::PathBuf;
-use serde_json::{from_reader, to_writer};
+use serde_json::{from_reader, to_writer, Value};
 use traffic::{levels::test_sensors, road::RoadId};
 use indicatif::ProgressBar;
+use std::io::{BufReader, BufWriter};
+
+fn load_best_history(path: &PathBuf) -> Vec<f32> {
+    std::fs::File::open(path)
+        .ok()
+        .and_then(|f| {
+            let reader = BufReader::new(f);
+            match from_reader::<_, Value>(reader) {
+                Ok(Value::Array(arr)) => Some(
+                    arr.into_iter()
+                        .filter_map(|v| v.as_f64().map(|n| n as f32))
+                        .collect(),
+                ),
+                Ok(Value::Number(n)) => n.as_f64().map(|n| vec![n as f32]),
+                Ok(_) => Some(Vec::new()),
+                Err(e) => {
+                    eprintln!("Could not parse {:?} as JSON ({e}); starting fresh.", path);
+                    None
+                }
+            }
+        })
+        .unwrap_or_default()
+}
+
+fn write_best_history(path: &PathBuf, history: &[f32]) {
+    match std::fs::File::create(path) {
+        Ok(file) => {
+            let writer = BufWriter::new(file);
+            if let Err(e) = to_writer(writer, history) {
+                eprintln!("Failed to write {:?}: {e}", path);
+            }
+        }
+        Err(e) => eprintln!("Could not create {:?}: {e}", path),
+    }
+}
 
 fn main() {
     // rng
@@ -42,9 +77,8 @@ fn main() {
     
 
     // This controls how many times the simulation runs before running fitness evaluation
-    const EPOCHS: usize = 20000;
-    const MAX_FRAMES: usize = 5000;
-
+    const EPOCHS: usize = 100;
+    const MAX_FRAMES: usize = 500;
 
     let initial_individuals: Vec<Individual> = 
         sim
@@ -94,10 +128,11 @@ fn main() {
         population.individuals = initial_individuals.clone();
     }
 
-    let mut best_fitness = std::fs::File::open(&best_path)
-        .ok()
-        .and_then(|f| from_reader::<_, f32>(std::io::BufReader::new(f)).ok())
-        .unwrap_or(f32::NEG_INFINITY);
+    let mut best_history = load_best_history(&best_path);
+    let mut best_fitness = best_history
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
     let mut last_evaluated = population.clone();
     let pb = ProgressBar::new(EPOCHS as u64);
 
@@ -156,14 +191,8 @@ fn main() {
         bytes.len()
     );
 
-    if let Ok(file) = std::fs::File::create(&best_path) {
-        let writer = std::io::BufWriter::new(file);
-        if let Err(e) = to_writer(writer, &best_fitness) {
-            eprintln!("Failed to write {:?}: {e}", best_path);
-        }
-    } else {
-        eprintln!("Could not create {:?}", best_path);
-    }
+    best_history.push(best_fitness);
+    write_best_history(&best_path, &best_history);
 
     pb.finish_with_message("Evolution Complete");
     println!("Best Fitness: {}", best_fitness);
