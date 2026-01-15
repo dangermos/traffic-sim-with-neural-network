@@ -1,10 +1,13 @@
+use ::rand::Rng;
 use core::f32;
-use std::{cmp::{self, Ordering, max}, collections::HashSet, iter::zip, vec};
-use ::rand::{Rng, distr::uniform::SampleRange};
+use std::{cmp::Ordering, vec};
 
+use crate::{
+    road::{RoadGrid, RoadId},
+    simulation::CarObs,
+};
 use macroquad::prelude::*;
-use neural::{Activation, Layer, Network};
-use crate::{road::{self, RoadGrid, RoadId}, simulation::{CarObs, Object, Simulation}};
+use neural::{LayerTopology, Network};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Destination {
@@ -13,52 +16,55 @@ pub struct Destination {
 
 impl Default for Destination {
     fn default() -> Self {
-        Destination { position: Vec2::ZERO }
+        Destination {
+            position: Vec2::ZERO,
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct CarWorld {
-    pub cars: Vec<Car>
+    pub cars: Vec<Car>,
 }
 
 impl CarWorld {
-
     pub fn new(cars: Vec<Car>) -> Self {
         Self { cars }
     }
 
     pub fn new_random<T: Rng>(num_cars: i32, road_grid: &RoadGrid, rng: &mut T) -> Self {
-        
-        let layers = vec![
-            Layer::new_random(4, 4, Activation::Tanh, rng),
-            Layer::new_random(4, 2, Activation::Tanh, rng)
+        const INPUTS: usize = 5;
+        const HIDDEN: usize = 5;
+        const OUTPUTS: usize = 2;
+
+        let topology = [
+            LayerTopology { neurons: INPUTS },
+            LayerTopology { neurons: HIDDEN },
+            LayerTopology { neurons: OUTPUTS },
         ];
 
-        let networks: Vec<Network> = (0..num_cars).map(
-            |_| Network::new(&layers)
-        ).collect();
+        let road_count = road_grid.roads.len();
 
-
-        let cars: CarWorld = CarWorld::new((0..num_cars).into_iter().map(
-            |x | { 
-                let (r, g, b, _a): (u8, u8, u8, u8) = rng.random();  
+        let cars = (0..num_cars)
+            .into_iter()
+            .map(|x| {
+                let (r, g, b, _a): (u8, u8, u8, u8) = rng.random();
+                let network = Network::new_random(&topology, rng);
                 Car::new_on_road(
-                    road_grid, 
-            RoadId(x as usize % (road_grid.roads.len())),
+                    road_grid,
+                    RoadId(x as usize % road_count),
                     Color::from_rgba(r, g, b, 255),
-            networks[x as usize].clone(),
-            x as u16
-                )}
-        ).collect());
+                    network,
+                    x as u16,
+                )
+            })
+            .collect();
 
-        cars
+        CarWorld::new(cars)
     }
 
     pub fn draw_cars(&self, debug: bool) {
-        self.cars.iter().for_each(
-            |x| draw_car(x, debug)
-        );
+        self.cars.iter().for_each(|x| draw_car(x, debug));
     }
 }
 
@@ -75,7 +81,6 @@ pub enum CarState {
 
 #[derive(Clone, Debug)]
 pub struct Car {
-
     pub position: Vec2,
     pub speed: f32,
     pub rotation: f32,
@@ -88,13 +93,12 @@ pub struct Car {
     destination: Option<Destination>,
 
     // Sensor Fields
-
-    /// This measures how far off the road the car is. 
+    /// This measures how far off the road the car is.
     on_roadness: f32,
 
     /// This measures how obstructed the car is, as in how 'clear' the front of the car is using a collection of rays
     obstruction_score: f32,
-    obstruction_rays: Option<Vec<Ray>>,
+    obstruction_rays: Vec<Ray>,
 
     /// This measures the distance of the current car to it's destination
     distance_to_destination: f32,
@@ -105,40 +109,43 @@ pub struct Car {
     // This measures how "aligned" the car is with it's current (assumed) road
     heading_error: f32,
     // Artificial Neural Network Fields
-
     pub network: Network,
-    
+
     // Genome Fields
-    time_spent_alive: f32,
-    time_spent_off_road: f32,
-    progress_to_goal: f32,
-
-
+    pub time_spent_alive: f32,
+    pub time_spent_off_road: f32,
+    pub progress_to_goal: f32,
+    pub distance_traveled: f32,
+    pub initial_distance_to_goal: f32,
+    stagnant_steps: u32,
+    pub remove_flag: bool,
 }
 
 impl Default for Car {
     fn default() -> Self {
-        Self { 
-            position: Vec2 { x: 0.0, y: 0.0 }, 
-            speed: 0.0, 
-            rotation: 0.0, 
-            car_id: 0, 
+        Self {
+            position: Vec2 { x: 0.0, y: 0.0 },
+            speed: 0.0,
+            rotation: 0.0,
+            car_id: 0,
             road_id: RoadId(0),
-            state: CarState::IDLE, 
-            color: WHITE, 
-            destination: None, 
-            on_roadness: 0.0, 
-            obstruction_score: 0.0, 
+            state: CarState::IDLE,
+            color: WHITE,
+            destination: None,
+            on_roadness: 0.0,
+            obstruction_score: 0.0,
             distance_to_destination: 0.0,
-            goal_align: 0.0, 
+            goal_align: 0.0,
             heading_error: 0.0,
             network: Network::new(&vec![]),
+            obstruction_rays: Vec::new(),
             time_spent_alive: 0.0,
-            obstruction_rays: None,
-
             time_spent_off_road: 0.0,
             progress_to_goal: 0.0,
-
+            distance_traveled: 0.0,
+            initial_distance_to_goal: 0.0,
+            stagnant_steps: 0,
+            remove_flag: false,
         }
     }
 }
@@ -147,15 +154,11 @@ impl Default for Car {
 pub struct Ray(Vec2, Vec2);
 
 impl Ray {
-    /// Returns an `f32` if and only if a point `c` is found somewhere close to 
+    /// Returns an `f32` if and only if a point `c` is found somewhere close to
     /// this `Ray` within radius `r`.
-    /// 
-    /// The `f32` represents how close the point `c` is to the origin of the Ray
-    /// 
-    /// 
     ///
+    /// The `f32` represents how close the point `c` is to the origin of the Ray
     pub fn occlusion(&self, c: Vec2, r: f32) -> Option<f32> {
-
         let origin = self.0;
         let end = self.1;
 
@@ -172,55 +175,111 @@ impl Ray {
 
         if (c - closest).length_squared() <= r * r {
             Some(1.0 - t)
-        }
-        else {
+        } else {
             None
         }
-        
     }
 }
 
-
 fn manhattan_distance(v1: &Vec2, v2: &Vec2) -> f32 {
-    (v2.x - v1.x).abs() - (v2.y - v1.y).abs()
+    (v2.x - v1.x).abs() + (v2.y - v1.y).abs()
 }
 
-
-
 impl Car {
-    
     pub fn new(position: Vec2, color: Color, network: Network, car_id: u16) -> Self {
-        
-        Self { position, car_id, color, state: CarState::AIControlled(Destination { position: Vec2::ZERO}), network,
+        Self {
+            position,
+            car_id,
+            color,
+            state: CarState::AIControlled(Destination {
+                position: Vec2::ZERO,
+            }),
+            network,
             ..Default::default()
         }
     }
 
     /// Spawns a Car on a Road with given `road_id`
-    pub fn new_on_road(road_grid: &RoadGrid, road_id: RoadId, color: Color, network: Network, car_id: u16) -> Self {
+    pub fn new_on_road(
+        road_grid: &RoadGrid,
+        road_id: RoadId,
+        color: Color,
+        network: Network,
+        car_id: u16,
+    ) -> Self {
+        // Deterministic spawn: pick a starting point on the road based on the car id.
+        // This reduces evaluation noise across generations.
+        let viable: Vec<&Vec2> = road_grid
+            .roads
+            .iter()
+            .map(|x| x.get_first_point())
+            .filter(|x| **x != vec2(0.0, 0.0))
+            .collect();
 
-        let position = *road_grid[road_id].get_first_point();
-        let rotation = 0.0;
+        // Deterministic position along the chosen road, spread out to avoid collisions.
+        // Use golden ratio-based distribution for better spacing - this ensures cars
+        // are spread across the road even with sequential IDs on the same road.
+        let road_points = &road_grid[road_id].points;
+        let num_points = road_points.len();
 
+        const GOLDEN_RATIO_CONJUGATE: f32 = 0.618033988749895;
+        let fractional_pos = ((car_id as f32) * GOLDEN_RATIO_CONJUGATE) % 1.0;
 
-        let mut rng = ::rand::rng();
+        // Map to road points, but avoid the very start/end where intersections occur.
+        // Use indices from 5% to 95% of the road to avoid clustering at endpoints.
+        let safe_start = num_points / 20; // 5% into the road
+        let safe_end = num_points - (num_points / 20); // 95% of the road
+        let safe_range = safe_end.saturating_sub(safe_start).max(1);
+        let position_index = safe_start + ((fractional_pos * safe_range as f32) as usize);
+        let position_index = position_index.min(num_points - 1);
 
-        let viable: Vec<&Vec2> = road_grid.roads.iter().map(
-            |x| x.get_first_point()
-        ).filter(|x| **x != vec2(0.0, 0.0)).collect();
+        let position = road_points[position_index];
 
-        let mut rand_dest = *viable[rng.random_range(0..viable.len())];
+        // Calculate initial rotation to face along the road direction
+        let rotation = if position_index + 1 < num_points {
+            let next_point = road_points[position_index + 1];
+            let direction = next_point - position;
+            direction.y.atan2(direction.x)
+        } else if position_index > 0 {
+            let prev_point = road_points[position_index - 1];
+            let direction = position - prev_point;
+            direction.y.atan2(direction.x)
+        } else {
+            0.0
+        };
 
-        while rand_dest == position { // Makes sure the destination is not just where the car started
-            rand_dest = *viable[rng.random_range(0..viable.len())];
+        // Deterministic destination selection (based on car_id)
+        // Use a different prime to avoid correlation with position selection
+        let mut dest_index = ((car_id as usize).wrapping_mul(17).wrapping_add(11)) % viable.len();
+        let mut rand_dest = *viable[dest_index];
+
+        // Make sure the destination is not exactly the spawn spot
+        while rand_dest == position {
+            dest_index = (dest_index + 1) % viable.len();
+            rand_dest = *viable[dest_index];
         }
 
-
-        let destination = Some(Destination {position: rand_dest });
+        let destination = Some(Destination {
+            position: rand_dest,
+        });
 
         let state = CarState::AIControlled(destination.unwrap_or(Destination { position }));
 
-        Self { position, rotation, car_id, road_id, state, color, network, destination, ..Default::default() }
+        // Use manhattan distance to match how progress_to_goal is accumulated.
+        let initial_distance_to_goal = manhattan_distance(&position, &rand_dest);
+
+        Self {
+            position,
+            rotation,
+            car_id,
+            road_id,
+            state,
+            color,
+            network,
+            destination,
+            initial_distance_to_goal,
+            ..Default::default()
+        }
     }
 
     pub fn get_id(&self) -> u16 {
@@ -228,65 +287,67 @@ impl Car {
     }
 
     pub fn change_state(&mut self, state: CarState) {
-
         match state {
             CarState::IDLE => {
                 self.state = CarState::IDLE;
-            },
+            }
 
             CarState::MovingToDestinationAuto(destination) => {
                 self.state = CarState::MovingToDestinationAuto(destination);
                 self.destination = Some(destination);
-            },
+            }
             CarState::LookingForRoad => {
                 self.state = CarState::LookingForRoad;
-            },
+            }
             CarState::UserControlled(destination) => {
                 self.state = CarState::UserControlled(destination);
                 self.destination = Some(destination);
-            },
+            }
             CarState::AIControlled(desination) => {
                 self.state = CarState::AIControlled(desination);
                 self.destination = Some(desination);
             }
             CarState::ReachedDestination => {
                 self.state = CarState::ReachedDestination;
-            },
+            }
             CarState::Crashed => {
                 self.state = CarState::Crashed;
             }
-
         }
     }
 
-    pub fn update<'a>(&'a mut self, road_grid: &'a RoadGrid, objects: &HashSet<CarObs>, debug: bool) {
+    pub fn update<'a>(&'a mut self, road_grid: &'a RoadGrid, objects: &[CarObs], debug: bool) {
         let prev_distance = self.distance_to_destination;
+        let prev_pos = self.position;
 
         for object in objects {
-
+            // Skip self
             if self.car_id == object.id {
+                continue;
+            }
+            // Skip crashed or finished cars - they shouldn't cause new collisions
+            if object.crashed {
                 continue;
             }
 
             if arrived(&self.position, &object.pos, 10.0) {
-                self.change_state(CarState::Crashed); 
-                // Potential Idea: Maybe make notification handlers to keep stdout clean. 
-                // A struct that only reacts to the first occurence of some signal sent by a crash would probably suffice. 
-            } 
+                self.change_state(CarState::Crashed);
+                // Potential Idea: Maybe make notification handlers to keep stdout clean.
+                // A struct that only reacts to the first occurence of some signal sent by a crash would probably suffice.
+            }
         }
 
-
-
         // Obstruction handling
-        self.obstruction_rays = Some(self.calculate_obstruction_rays());
+        self.calculate_obstruction_rays();
         self.obstruction_score = self.get_obstruction_score(objects);
-
 
         // On-Road Score
         self.on_roadness = on_roadness(self, road_grid);
 
-        self.distance_to_destination = manhattan_distance(&self.position, &self.destination.unwrap_or_default().position);
-
+        self.distance_to_destination = manhattan_distance(
+            &self.position,
+            &self.destination.unwrap_or_default().position,
+        );
 
         // Goal Alignment
         self.goal_align = self.goal_alignment();
@@ -295,7 +356,7 @@ impl Car {
         self.heading_error = self.heading_error(road_grid);
 
         if self.on_roadness < 1.0 {
-            self.time_spent_off_road += get_frame_time() * (1.0 - self.on_roadness);
+            self.time_spent_off_road += 1.0 * (1.0 - self.on_roadness);
         }
 
         if self.destination.is_some() {
@@ -304,22 +365,17 @@ impl Car {
         }
 
         match &self.state {
-
-            CarState::IDLE => {
-
-                self.time_spent_alive += get_frame_time();
-
-            },
+            CarState::IDLE => {}
 
             CarState::MovingToDestinationAuto(destination) => {
-
                 let eps: f32 = 1.0;
                 let angle_eps: f32 = 0.1;
 
                 let to_target = destination.position - self.position;
                 let distance_to_target = to_target.length();
 
-                if distance_to_target < eps { // Arrived at Destination
+                if distance_to_target < eps {
+                    // Arrived at Destination
                     self.position = destination.position;
                     self.destination = None;
                     self.change_state(CarState::ReachedDestination);
@@ -329,18 +385,21 @@ impl Car {
 
                 let mut err = angle_to_target - self.rotation;
 
-                while err > std::f32::consts::PI { err -= 2.0 * f32::consts::PI; }
-                while err < -std::f32::consts::PI { err += 2.0 * f32::consts::PI; }
+                while err > std::f32::consts::PI {
+                    err -= 2.0 * f32::consts::PI;
+                }
+                while err < -std::f32::consts::PI {
+                    err += 2.0 * f32::consts::PI;
+                }
 
-                let facing_target= err.abs() < angle_eps;
+                let facing_target = err.abs() < angle_eps;
 
-            
-                if !facing_target { self.rotate_car(if err > 0.1 {1.0} else {-1.0}); }
+                if !facing_target {
+                    self.rotate_car(if err > 0.1 { 1.0 } else { -1.0 });
+                }
 
-                
                 let max_speed: f32 = 40.0;
                 let slow_radius = 10.0;
-
 
                 let scaled_angle = (err.cos() + 1.0) * 0.5;
                 let scaled_distance = (distance_to_target / slow_radius).clamp(0.0, 1.0);
@@ -349,51 +408,70 @@ impl Car {
 
                 self.speed = desired_speed;
                 self.move_car(debug);
-
-            },
+            }
 
             CarState::LookingForRoad => {
-
                 if let Some(closest) = road_grid.roads.iter().min_by(|a, b| {
                     let da = self.position.distance(*a.get_first_point());
-                    let db = self.position.distance(*b.get_first_point( ));
+                    let db = self.position.distance(*b.get_first_point());
                     da.partial_cmp(&db).unwrap_or(Ordering::Equal)
                 }) {
                     let p = closest.get_first_point();
                     println!("Closest road starts at ({:.2}, {:.2})", p.x, p.y);
-                    let destination = Destination { position: Vec2::new(p.x, p.y) };
+                    let destination = Destination {
+                        position: Vec2::new(p.x, p.y),
+                    };
                     self.destination = Some(destination);
                     self.change_state(CarState::MovingToDestinationAuto(destination));
-                }
-                else {
+                } else {
                     println!("No Roads found on Grid.");
                 }
 
-                self.time_spent_alive += get_frame_time();
+                self.time_spent_alive += 1.0;
+            }
 
-            },
+            CarState::AIControlled(destination) => {
+                let dt = 0.01;
 
-            CarState::AIControlled(destination) => { //TODO Implement Follow Road
+                // If we're very close to our destination, register arrival and transition.
+                let eps: f32 = 10.0;
+                if self.distance_to_destination < eps {
+                    // Arrived at Destination
+                    self.position = destination.position;
+                    self.destination = None;
+                    self.change_state(CarState::ReachedDestination);
+                } else {
+                    const MAX_SPEED: f32 = 80.0;
+                    const MAX_ANGULAR_VELOCITY: f32 = 3.0; // In radians
+                    const ACCELERATION: f32 = 120.0;
 
-                let inputs = [self.obstruction_score, self.on_roadness, self.goal_align, self.heading_error];
+                    let inputs = [
+                        self.obstruction_score, // 0 -> 1
+                        self.on_roadness,       // 0 -> 1
+                        self.goal_align,        // -1 -> 1
+                        self.heading_error,     // -1 -> 1
+                        self.speed / MAX_SPEED, // 0 -> 1
+                    ];
 
-                let result = self.network.propagate(inputs.to_vec());
+                    let result = self.network.propagate(inputs.to_vec());
 
-                assert!(result.len() == 2, "The network has more than 2 outputs, no good!");
+                    let throttle = result[0].clamp(-1.0, 1.0);
+                    let steering = result[1].clamp(-1.0, 1.0);
 
-                println!("The network says: {:?}", result);
+                    assert!(
+                        result.len() == 2,
+                        "The network has more than 2 outputs, no good!"
+                    );
 
-                let (speed, rotation) = (result[0], result[1]);
+                    // Apply physics
+                    self.speed = (self.speed + throttle * ACCELERATION * dt).clamp(0.0, MAX_SPEED);
+                    self.rotation += steering * MAX_ANGULAR_VELOCITY * dt;
+                    self.distance_traveled += self.speed * dt;
+                    self.move_car(debug);
 
-                self.speed = speed * get_frame_time() * 20.0;
-                self.rotation = rotation * get_frame_time();
-
-
-                // println!("Hi from car {}, I've been alive for {:.0} seconds", self.get_id(), self.time_spent_alive);
-
-                self.time_spent_alive += get_frame_time();
-                
-            },
+                    self.time_spent_alive += 1.0;
+                }
+            }
 
             CarState::UserControlled(destination) => {
                 //let max_speed = 20.0;
@@ -402,45 +480,56 @@ impl Car {
                 let to_target = destination.position - self.position;
                 let distance_to_target = to_target.length();
 
-                if distance_to_target < eps { // Reached Destination
+                if distance_to_target < eps {
+                    // Reached Destination
                     self.position = destination.position;
                     self.change_state(CarState::ReachedDestination);
                 }
 
                 self.move_car_manual(debug);
 
-                if debug {
-                }
+                if debug {}
 
-                self.time_spent_alive += get_frame_time();
-            },
-            
+                self.time_spent_alive += 1.0;
+            }
+
             CarState::ReachedDestination => {
                 self.color.a = 0.2;
-            },
+            }
 
             CarState::Crashed => {
                 self.speed = 0.0;
-
             }
-        
         }
- 
 
+        // Stagnation detection: mark cars as crashed if they don't move for a while.
+        // NOTE: We no longer set remove_flag here to avoid corrupting fitness attribution
+        // during evolution. Instead, stagnant cars transition to Crashed state.
+        const STAGNANT_MOVEMENT_EPS: f32 = 0.05;
+        const STAGNANT_FRAMES: u32 = 300;
+
+        let moved = (self.position - prev_pos).length();
+        if moved < STAGNANT_MOVEMENT_EPS && self.speed.abs() < 0.1 {
+            self.stagnant_steps = self.stagnant_steps.saturating_add(1);
+            if self.stagnant_steps > STAGNANT_FRAMES {
+                // Mark as crashed instead of removing - preserves population alignment
+                self.change_state(CarState::Crashed);
+            }
+        } else {
+            self.stagnant_steps = 0;
+        }
     }
 
     fn rotate_car(&mut self, amount: f32) {
-        self.rotation += amount * get_frame_time()
+        self.rotation += amount * 1.0
     }
 
     fn move_car(&mut self, _debug: bool) {
-        
         let dt = 0.01;
         let dir = Vec2::from_angle(self.rotation);
 
         self.position += dir * self.speed * dt;
-        
-        
+
         //if debug {println!("{}", self.position);}
     }
 
@@ -465,15 +554,17 @@ impl Car {
         }
 
         if debug {
-            ("Keys Pressed: {:#?}\nPosition: {}", get_keys_down(), self.position);
+            (
+                "Keys Pressed: {:#?}\nPosition: {}",
+                get_keys_down(),
+                self.position,
+            );
         }
-
     }
 
     pub fn get_destination(&self) -> Option<Destination> {
         self.destination
     }
-
 
     /// Convert a local-space point (centered on car) into world space.
     pub fn world_from_local(&self, local: Vec2) -> Vec2 {
@@ -485,38 +576,37 @@ impl Car {
         vec2(30.0, 10.0)
     }
 
-
     // Sensor Calculation Helpers
-    pub fn calculate_obstruction_rays(&self) -> Vec<Ray> {
-
+    pub fn calculate_obstruction_rays(&mut self) {
         let dims = vec2(30.0, 10.0);
 
         let angles: [f32; 5] = [-0.4, -0.1, 0.0, 0.1, 0.4]; // radians
 
-        let mut rays = Vec::new();
+        self.obstruction_rays.clear();
+        self.obstruction_rays
+            .reserve_exact(angles.len().saturating_sub(self.obstruction_rays.len()));
 
         for a in angles {
             let origin_local = vec2(dims.x * 0.5, 0.0); // front from center
             let start = self.world_from_local(origin_local);
             let end = start + rotate(vec2(200.0 * a.cos().powi(5), 0.0), self.rotation + a);
 
-            rays.push(Ray(start, end));
+            self.obstruction_rays.push(Ray(start, end));
         }
-
-        rays
     }
 
-    pub fn get_obstruction_score(&self, objects: &HashSet<CarObs>) -> f32 {
+    pub fn get_obstruction_score(&self, objects: &[CarObs]) -> f32 {
         let mut ray_scores: [f32; 5] = [0.0; 5];
 
-        for (idx, ray) in self.obstruction_rays.as_ref().unwrap().iter().enumerate() {
+        for (idx, ray) in self.obstruction_rays.iter().enumerate() {
             // Every Car has 5 obstruction rays
 
             let mut closest_obstruction: f32 = 0.0;
 
             for object in objects {
-
-                if self.get_id() == object.id { continue; }
+                if self.get_id() == object.id {
+                    continue;
+                }
 
                 let occ = ray.occlusion(object.pos, 10.0).unwrap_or(0.0);
                 closest_obstruction = closest_obstruction.max(occ);
@@ -528,11 +618,9 @@ impl Car {
     }
 
     pub fn goal_alignment(&self) -> f32 {
-
         if !self.destination.is_some() {
             return 0.0;
         }
-
 
         let to_goal = self.destination.unwrap().position - self.position;
         let dist = to_goal.length();
@@ -544,7 +632,6 @@ impl Car {
         let goal_dir = to_goal / dist;
         let vec_direction = vec2(self.rotation.cos(), self.rotation.sin());
         vec_direction.dot(goal_dir).clamp(-1.0, 1.0)
-
     }
 
     pub fn heading_error(&self, road_grid: &RoadGrid) -> f32 {
@@ -555,25 +642,24 @@ impl Car {
         let tangent = road_tangent_at_pos(self.position, &road_points);
 
         vec_direction.perp_dot(tangent).clamp(-1.0, 1.0)
+    }
 
-    } 
-    
-
+    pub fn state(&self) -> CarState {
+        self.state.clone()
+    }
 }
 
-
-
 fn point_segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
-            let ab = b - a;
-            let ab_len2 = ab.length_squared();
-            if ab_len2 <= 1e-6 {
-                return (p - a).length();
-            }
-            let t = ((p - a).dot(ab) / ab_len2).clamp(0.0, 1.0);
-            let closest = a + ab * t;
+    let ab = b - a;
+    let ab_len2 = ab.length_squared();
+    if ab_len2 <= 1e-6 {
+        return (p - a).length();
+    }
+    let t = ((p - a).dot(ab) / ab_len2).clamp(0.0, 1.0);
+    let closest = a + ab * t;
 
-            (p - closest).length()
-        }
+    (p - closest).length()
+}
 
 fn distance_to_road_centerline(p: Vec2, road_points: &[Vec2]) -> f32 {
     if road_points.len() < 2 {
@@ -585,12 +671,11 @@ fn distance_to_road_centerline(p: Vec2, road_points: &[Vec2]) -> f32 {
         let d = point_segment_distance(p, seg[0], seg[1]);
         best = best.min(d);
     }
-    
+
     best
 }
 
 fn on_roadness(car: &mut Car, road_grid: &RoadGrid) -> f32 {
-
     const RECOVERY_DISTANCE: f32 = 100.0;
 
     let road_id = car.road_id;
@@ -598,7 +683,6 @@ fn on_roadness(car: &mut Car, road_grid: &RoadGrid) -> f32 {
 
     let road_width: f32 = 30.0;
     let r: f32 = road_width * 0.5;
-
 
     let road_neighbors = road_grid
         .next_roads
@@ -608,20 +692,29 @@ fn on_roadness(car: &mut Car, road_grid: &RoadGrid) -> f32 {
 
     let mut distances = Vec::new();
 
-    distances.push((road.get_id(), distance_to_road_centerline(car.position, &road.points)));
+    distances.push((
+        road.get_id(),
+        distance_to_road_centerline(car.position, &road.points),
+    ));
 
     let current_d = distances[0].1;
 
-    if current_d > RECOVERY_DISTANCE { // If car is super far from the road it is thought to be on, run a global search
+    if current_d > RECOVERY_DISTANCE {
+        // If car is super far from the road it is thought to be on, run a global search
 
         for road in &road_grid.roads {
-            distances.push((road.road_id, distance_to_road_centerline(car.position, &road.points)));   
+            distances.push((
+                road.road_id,
+                distance_to_road_centerline(car.position, &road.points),
+            ));
         }
-
-    }
-    else { // If not, an easy local search is acceptable. 
+    } else {
+        // If not, an easy local search is acceptable.
         for road in road_neighbors {
-            distances.push((*road, distance_to_road_centerline(car.position, &road_grid[*road].points)) );
+            distances.push((
+                *road,
+                distance_to_road_centerline(car.position, &road_grid[*road].points),
+            ));
         }
     }
 
@@ -641,20 +734,17 @@ fn on_roadness(car: &mut Car, road_grid: &RoadGrid) -> f32 {
 }
 
 fn arrived(v1: &Vec2, v2: &Vec2, eps: f32) -> bool {
-    (v1.x - v2.x).abs() < eps &&
-    (v1.y - v2.y).abs() < eps
+    (v1.x - v2.x).abs() < eps && (v1.y - v2.y).abs() < eps
 }
 
-
 fn rotate(p: Vec2, theta: f32) -> Vec2 {
-        Vec2::new(
-            p.x * theta.cos() - p.y * theta.sin(),
-            p.x * theta.sin() + p.y * theta.cos(),
-        )
+    Vec2::new(
+        p.x * theta.cos() - p.y * theta.sin(),
+        p.x * theta.sin() + p.y * theta.cos(),
+    )
 }
 
 fn road_tangent_at_pos(pos: Vec2, points: &[Vec2]) -> Vec2 {
-
     let mut best_i: usize = 0;
     let mut best_d2 = f32::INFINITY;
 
@@ -674,63 +764,93 @@ fn road_tangent_at_pos(pos: Vec2, points: &[Vec2]) -> Vec2 {
     }
 
     (points[best_i + 1] - points[best_i]).normalize()
-
 }
-
 
 pub fn draw_car(car: &Car, debug: bool) {
     let size = "small";
 
     let dims = match size {
-        "small" => {
-            (30.0, 10.0)
-        },
-        "med" => {
-            (50.0, 20.0)
-        },
+        "small" => (30.0, 10.0),
+        "med" => (50.0, 20.0),
         _ => {
             (0.0, 0.0);
             panic!("Please specify a car size")
         }
     };
 
-    draw_rectangle_ex(car.position.x, car.position.y, dims.0, dims.1, 
-        DrawRectangleParams 
-        { offset: vec2(0.5, 0.5),
-        rotation: car.rotation, color: car.color });
+    let mut display_color = car.color;
+    match car.state() {
+        CarState::ReachedDestination => {
+            display_color = Color::from_rgba(120, 210, 140, 220);
+        }
+        CarState::Crashed => {
+            display_color = Color::from_rgba(210, 80, 80, 200);
+        }
+        _ => {}
+    }
 
-    // boop
+    draw_rectangle_ex(
+        car.position.x,
+        car.position.y,
+        dims.0,
+        dims.1,
+        DrawRectangleParams {
+            offset: vec2(0.5, 0.5),
+            rotation: car.rotation,
+            color: display_color,
+        },
+    );
 
     if debug {
+        // Outline aligned to rotation.
+        let hx = dims.0 * 0.5;
+        let hy = dims.1 * 0.5;
+        let corners = [vec2(-hx, -hy), vec2(hx, -hy), vec2(hx, hy), vec2(-hx, hy)];
 
-        fn draw_obstruction_rays(car: &Car) {
-
-            if car.obstruction_rays.is_some() {
-
-                let rays  = car.obstruction_rays.as_ref().unwrap();
-
-                let color = car.color.with_alpha(0.5);
-
-                for (idx, i) in rays.iter().enumerate() {
-                    draw_line(i.0.x, i.0.y, i.1.x, i.1.y, 3.0, color);
-                    draw_circle_lines(i.1.x, i.1.y, 10.0, 3.0, color);
-                    draw_text(format!("{}", idx).as_str(), i.1.x, i.1.y, 34.0, GREEN);
-                }
-            }
-
-            else {
-                return;
-            }
+        for idx in 0..4 {
+            let a = car.world_from_local(corners[idx]);
+            let b = car.world_from_local(corners[(idx + 1) % 4]);
+            draw_line(a.x, a.y, b.x, b.y, 2.0, display_color.with_alpha(0.6));
         }
 
+        let nose = car.world_from_local(vec2(dims.0 * 0.6, 0.0));
+        draw_line(
+            car.position.x,
+            car.position.y,
+            nose.x,
+            nose.y,
+            2.0,
+            display_color.with_alpha(0.8),
+        );
 
-        // draw_obstruction_rays(car); // For Drawing Obstruction Rays of each Car
-        draw_text(&car.get_id().to_string(), car.position.x + dims.0 / 2.0, car.position.y, 30.0, GREEN); // For drawing each Car ID next to itself
-        draw_text(format!("{:.0}", &car.position).as_str(), car.position.x + dims.0 / 2.0, car.position.y + 20.0, 20.0, GREEN); // For drawing each Car's position next to itself
+        draw_text(
+            format!("#{}", car.get_id()).as_str(),
+            car.position.x - dims.0 * 0.2,
+            car.position.y - dims.1 * 0.4,
+            18.0,
+            GREEN,
+        );
 
+        // Destination hint: short arrow from car toward its goal (no full line).
+        if let Some(dest) = car.get_destination() {
+            let to_goal = dest.position - car.position;
+            let dist = to_goal.length();
+            if dist > 1.0 {
+                let dir = to_goal / dist;
+                let arrow_len = dist.min(40.0);
+                let head_len = 8.0;
+                let start = car.position;
+                let end = start + dir * arrow_len;
+                let arrow_color = Color::from_rgba(255, 210, 100, 220);
 
+                draw_line(start.x, start.y, end.x, end.y, 2.0, arrow_color);
 
-
-    }                     
-
+                let head_dir = -dir * head_len;
+                let left = end + rotate(head_dir, 0.6);
+                let right = end + rotate(head_dir, -0.6);
+                draw_line(end.x, end.y, left.x, left.y, 2.0, arrow_color);
+                draw_line(end.x, end.y, right.x, right.y, 2.0, arrow_color);
+            }
+        }
+    }
 }
