@@ -1,13 +1,16 @@
-use bincode::{deserialize_from, serialize};
 use ::rand::SeedableRng;
-use genetics::{evolve_generation, make_sim_from_population_with_grid, Individual, Population};
+use bincode::{deserialize_from, serialize};
+use genetics::{Individual, Population, evolve_generation, make_sim_from_population_with_grid};
+use indicatif::ProgressBar;
 use macroquad::prelude::*;
 use rand_chacha::ChaCha8Rng;
-use std::path::PathBuf;
-use serde_json::{from_reader, to_writer, Value};
-use traffic::{levels::test_sensors, road::RoadId};
-use indicatif::ProgressBar;
+use serde_json::{Value, from_reader, to_writer};
 use std::io::{BufReader, BufWriter};
+use std::path::PathBuf;
+use traffic::levels::overnight_training;
+
+mod metrics;
+use metrics::{GenerationMetrics, MetricsWriter, print_progress};
 
 fn load_best_history(path: &PathBuf) -> Vec<f32> {
     std::fs::File::open(path)
@@ -47,41 +50,30 @@ fn main() {
     // rng
     let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-    // Size Variables
-    let x = 1920.0;
-    let y = 1080.0;
-    let center = vec2(x * 0.5, y * 0.5);
-    let screen = vec2(x, y);
-
-    // Pick a Level
-    
-    let mut sim = test_sensors(center, screen, &mut rng);
+    // Use the overnight training level for comprehensive evolution
+    let mut sim = overnight_training(&mut rng);
 
     println!(
         "Level Description:
-     Cars: {:?}
-     Roads: {:?}
+     Cars: {}
+     Roads: {}
      ",
-        sim.cars
-            .cars
-            .iter()
-            .map(|x| x.get_id())
-            .collect::<Vec<u16>>(),
-        sim.roads
-            .roads
-            .iter()
-            .map(|x| x.get_id())
-            .collect::<Vec<RoadId>>()
+        sim.cars.cars.len(),
+        sim.roads.roads.len()
     );
 
-    
+    // Overnight training settings
+    const EPOCHS: usize = 100; // Many generations for overnight run
+    const MAX_FRAMES: usize = 2000; // Longer episodes for complex navigation
+    const ELITISM: usize = 10; // Preserve more top performers
+    const MUTATION_RATE: f32 = 0.3; // Higher exploration
+    const MUTATION_STRENGTH: f32 = 0.3;
 
-    // This controls how many times the simulation runs before running fitness evaluation
-    const EPOCHS: usize = 100;
-    const MAX_FRAMES: usize = 500;
+    // Early exit detection disabled - it was causing premature termination
+    // and preventing proper fitness evaluation of slow-starting networks.
+    const ENABLE_EARLY_EXIT: bool = false;
 
-    let initial_individuals: Vec<Individual> = 
-        sim
+    let initial_individuals: Vec<Individual> = sim
         .cars
         .cars
         .iter()
@@ -96,6 +88,7 @@ fn main() {
 
     let checkpoint_path = PathBuf::from("individuals.bin");
     let best_path = PathBuf::from("best_fitness.json");
+    let metrics_path = PathBuf::from("metrics.csv");
 
     let i: Vec<Individual> = if let Ok(file) = std::fs::File::open(&checkpoint_path) {
         let reader = std::io::BufReader::new(file);
@@ -107,7 +100,10 @@ fn main() {
             initial_individuals.clone()
         })
     } else {
-        eprintln!("No checkpoint found at {:?}; starting fresh.", checkpoint_path);
+        eprintln!(
+            "No checkpoint found at {:?}; starting fresh.",
+            checkpoint_path
+        );
         initial_individuals.clone()
     };
 
@@ -115,7 +111,7 @@ fn main() {
         individuals: i,
         generation: 0,
     };
-    
+
     let base_road_grid = sim.roads.clone();
     sim = make_sim_from_population_with_grid(&population, &base_road_grid, &mut rng);
 
@@ -136,6 +132,10 @@ fn main() {
     let mut last_evaluated = population.clone();
     let pb = ProgressBar::new(EPOCHS as u64);
 
+    // Initialize metrics writer
+    let mut metrics_writer =
+        MetricsWriter::new(&metrics_path).expect("Failed to create metrics file");
+
     const STALL_DISTANCE: f32 = 5.0;
     const STALL_FRAMES: usize = 200;
 
@@ -146,7 +146,10 @@ fn main() {
             sim.update(false);
 
             // Track max distance traveled to detect stagnation and exit early.
-            if frame % 16 == 0 {
+            // NOTE: Early exit is now disabled by default because it was causing
+            // premature termination before networks could be properly evaluated,
+            // especially in early generations with random weights.
+            if ENABLE_EARLY_EXIT && frame % 16 == 0 {
                 max_distance = sim
                     .cars
                     .cars
@@ -161,25 +164,47 @@ fn main() {
         }
 
         // Evaluate fitness for the current generation before evolving.
-        for (ind, car) in population
-            .individuals
-            .iter_mut()
-            .zip(sim.cars.cars.iter())
-        {
+        for (ind, car) in population.individuals.iter_mut().zip(sim.cars.cars.iter()) {
             ind.fitness = genetics::fitness(car);
             best_fitness = best_fitness.max(ind.fitness);
         }
 
+        // Compute and record metrics
+        let metrics = GenerationMetrics::compute(generation as u32, &population, &sim.cars.cars);
+
+        if let Err(e) = metrics_writer.write_metrics(&metrics) {
+            eprintln!("Failed to write metrics: {e}");
+        }
+
+        // Print progress every 10 generations
+        if generation % 10 == 0 {
+            print_progress(&metrics);
+        }
+
         last_evaluated = population.clone();
 
-        let new = evolve_generation(&population, 3, 0.2, 0.2, &mut rng);
+        // Evolution Function
+        let new = evolve_generation(
+            &population,
+            ELITISM,
+            MUTATION_RATE,
+            MUTATION_STRENGTH,
+            &mut rng,
+        );
 
         population = new;
         sim = make_sim_from_population_with_grid(&population, &base_road_grid, &mut rng);
 
         pb.inc(1);
-        let eta = pb.eta();
-        println!("About {} Hours, {} Minutes, {} Seconds left for this program run", eta.as_secs() / 3600, (eta.as_secs() % 3600) / 60, eta.as_secs() % 60);
+
+        // Save checkpoint every 100 generations
+        if generation % 100 == 0 && generation > 0 {
+            let bytes =
+                serialize(&last_evaluated.individuals).expect("Could not serialize individuals");
+            std::fs::write(&checkpoint_path, &bytes).expect("Could not write checkpoint");
+            best_history.push(best_fitness);
+            write_best_history(&best_path, &best_history);
+        }
     }
 
     let bytes = serialize(&last_evaluated.individuals).expect("Could not serialize individuals");
@@ -196,5 +221,5 @@ fn main() {
 
     pb.finish_with_message("Evolution Complete");
     println!("Best Fitness: {}", best_fitness);
-
+    println!("Metrics saved to: {:?}", metrics_path);
 } // End Simulation
