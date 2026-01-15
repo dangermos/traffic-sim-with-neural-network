@@ -1,5 +1,5 @@
 use macroquad::{
-    color::{GRAY, PINK},
+    color::Color,
     math::{Vec2, vec2},
 };
 use neural::{LayerTopology, Network};
@@ -67,7 +67,7 @@ pub fn build_level_2<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulat
     Simulation::new(cars, road_grid)
 }
 
-pub fn build_level_3<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
+pub fn build_level_3<T: Rng>(_center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
     let margin = 80.0;
     let left = margin;
     let right = screen.x - margin;
@@ -91,7 +91,7 @@ pub fn build_level_3<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulat
     Simulation::new(cars, road_grid)
 }
 
-pub fn build_straight_road_4<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
+pub fn build_straight_road_4<T: Rng>(center: Vec2, _screen: Vec2, rng: &mut T) -> Simulation {
     let roads = vec![
         Road::new(center, vec2(center.x + 200.0, center.y), RoadId(0)),
         Road::new(
@@ -108,7 +108,22 @@ pub fn build_straight_road_4<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) ->
     Simulation::new(cars, road_grid)
 }
 
-pub fn test_sensors<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulation {
+pub fn build_straight_line_level<T: Rng>(start: Vec2, length: f32, rng: &mut T) -> Simulation {
+    // Two colinear segments to satisfy RoadGrid's requirement for multiple roads.
+    let mid = start + vec2(length * 0.5, 0.0);
+    let end = start + vec2(length, 0.0);
+
+    let roads = vec![
+        Road::new(start, mid, RoadId(0)),
+        Road::new(mid, end, RoadId(1)),
+    ];
+
+    let road_grid = RoadGrid::new(roads);
+    let cars = CarWorld::new_random(6, &road_grid, rng);
+    Simulation::new(cars, road_grid)
+}
+
+pub fn test_sensors<T: Rng>(_center: Vec2, _screen: Vec2, rng: &mut T) -> Simulation {
 
     const NUM_ROADS: usize = 20;
     const NUM_CARS: usize = 100;
@@ -122,17 +137,121 @@ pub fn test_sensors<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulati
         LayerTopology { neurons: 2 },
     ];
 
-
+    
     let cars = CarWorld { cars:
         (0..NUM_CARS).map(|x| {
                 let network = Network::new_random(&topology, rng);
-                Car::new_on_road(&road_grid, RoadId(x % NUM_ROADS), GRAY, network, x as u16)
+                let (r,g, b, _a): (u8, u8, u8, u8)  = rng.random();
+                let color = Color::from_rgba(r, g, b, 255);
+                Car::new_on_road(&road_grid, RoadId(x % NUM_ROADS), color, network, x as u16)
             })
         .collect()
     };
-        //Car::new_on_road(&road_grid, RoadId(1), PINK, network.clone(), 1),
 
+    Simulation::new(cars, road_grid)
+}
 
-
+/// A comprehensive training level for overnight evolution runs.
+/// 
+/// Features:
+/// - Large interconnected grid with varied path lengths
+/// - Multiple difficulty zones (easy straight sections + complex intersections)
+/// - Enough cars to create interesting collision avoidance scenarios
+/// - Roads of varying lengths to test both short and long navigation
+pub fn overnight_training<T: Rng>(rng: &mut T) -> Simulation {
+    const NUM_CARS: usize = 200;
+    
+    // Build a proper city grid with intersections
+    let city_center = vec2(960.0, 540.0);
+    let block_size = 300.0;
+    let grid_size = 5; // 5x5 grid of blocks
+    
+    let half_span = block_size * (grid_size as f32) * 0.5;
+    
+    let mut roads: Vec<Road> = Vec::new();
+    let mut id: usize = 0;
+    
+    // Horizontal roads (west to east)
+    for row in 0..=grid_size {
+        let y = city_center.y - half_span + row as f32 * block_size;
+        let start = vec2(city_center.x - half_span, y);
+        let end = vec2(city_center.x + half_span, y);
+        roads.push(Road::new(start, end, RoadId(id)));
+        id += 1;
+    }
+    
+    // Vertical roads (north to south)
+    for col in 0..=grid_size {
+        let x = city_center.x - half_span + col as f32 * block_size;
+        let start = vec2(x, city_center.y - half_span);
+        let end = vec2(x, city_center.y + half_span);
+        roads.push(Road::new(start, end, RoadId(id)));
+        id += 1;
+    }
+    
+    // Diagonal roads for variety (corner to corner shortcuts)
+    roads.push(Road::new(
+        vec2(city_center.x - half_span, city_center.y - half_span),
+        vec2(city_center.x + half_span, city_center.y + half_span),
+        RoadId(id),
+    ));
+    id += 1;
+    
+    roads.push(Road::new(
+        vec2(city_center.x - half_span, city_center.y + half_span),
+        vec2(city_center.x + half_span, city_center.y - half_span),
+        RoadId(id),
+    ));
+    id += 1;
+    
+    // Curved bypass roads around the edges (forms a diamond/ring road)
+    let outer_offset = half_span + 150.0;
+    roads.push(Road::new(
+        vec2(city_center.x - outer_offset, city_center.y),
+        vec2(city_center.x, city_center.y - outer_offset),
+        RoadId(id),
+    ));
+    id += 1;
+    
+    roads.push(Road::new(
+        vec2(city_center.x, city_center.y - outer_offset),
+        vec2(city_center.x + outer_offset, city_center.y),
+        RoadId(id),
+    ));
+    id += 1;
+    
+    roads.push(Road::new(
+        vec2(city_center.x + outer_offset, city_center.y),
+        vec2(city_center.x, city_center.y + outer_offset),
+        RoadId(id),
+    ));
+    id += 1;
+    
+    roads.push(Road::new(
+        vec2(city_center.x, city_center.y + outer_offset),
+        vec2(city_center.x - outer_offset, city_center.y),
+        RoadId(id),
+    ));
+    
+    let road_grid = RoadGrid::new(roads);
+    let road_count = road_grid.roads.len();
+    
+    let topology = [
+        LayerTopology { neurons: 5 },
+        LayerTopology { neurons: 8 },  // Slightly larger hidden layer for complex behavior
+        LayerTopology { neurons: 2 },
+    ];
+    
+    let cars = CarWorld {
+        cars: (0..NUM_CARS)
+            .map(|x| {
+                let network = Network::new_random(&topology, rng);
+                let (r, g, b, _a): (u8, u8, u8, u8) = rng.random();
+                let color = Color::from_rgba(r, g, b, 255);
+                Car::new_on_road(&road_grid, RoadId(x % road_count), color, network, x as u16)
+            })
+            .collect(),
+    };
+    
     Simulation::new(cars, road_grid)
 }

@@ -1,9 +1,9 @@
-use genetics::{Individual, Population};
-use macroquad::prelude::*;
 use ::rand::SeedableRng;
+use bincode::deserialize;
+use genetics::Individual;
+use macroquad::prelude::*;
 use rand_chacha::ChaCha8Rng;
-use bincode::{serialize, deserialize};
-use traffic::levels::test_sensors;
+use traffic::levels::*;
 
 const BASE_ZOOM: f32 = 0.003;
 fn handle_input(camera: &mut Camera2D) {
@@ -52,16 +52,8 @@ fn handle_input(camera: &mut Camera2D) {
     }
 }
 
-
-
-
-
-
-
 #[macroquad::main("Simulation Window")]
 async fn main() {
-
-
     let mut rng = ChaCha8Rng::seed_from_u64(42);
     // Size Variables
     let x = 1920.0;
@@ -71,8 +63,7 @@ async fn main() {
 
     let base_zoom = vec2(BASE_ZOOM, BASE_ZOOM);
 
-    let mut sim = test_sensors(center, screen, &mut rng);
-
+    let mut sim = overnight_training(&mut rng);
 
     let initial_individuals: Vec<Individual> = sim
         .cars
@@ -88,12 +79,13 @@ async fn main() {
     let expected_pop_size = initial_individuals.len();
 
     let checkpoint_path = "individuals.bin";
-    let i = if std::path::Path::new(checkpoint_path).exists() {
+
+    let _i = if std::path::Path::new(checkpoint_path).exists() {
         let data = std::fs::read(checkpoint_path).expect("Failed to read checkpoint file");
         let individuals: Vec<Individual> =
             deserialize(&data).expect("Failed to deserialize individuals");
         if individuals.len() != expected_pop_size {
-            panic!(
+            eprintln!(
                 "Checkpoint population size {} does not match expected size {}",
                 individuals.len(),
                 expected_pop_size
@@ -104,18 +96,6 @@ async fn main() {
         initial_individuals
     };
 
-    let mut population = Population {
-        individuals: i,
-        generation: 0,
-    };
-
-
-    
-    let mut sim = traffic::levels::test_sensors(
-        vec2(screen_width() * 0.5, screen_height() * 0.5),
-        vec2(screen_width(), screen_height()),
-        &mut rng,
-    );
 
     // Camera initialization
     let mut camera = Camera2D {
@@ -124,13 +104,12 @@ async fn main() {
         ..Default::default()
     };
 
-
     loop {
         handle_input(&mut camera);
         set_camera(&camera);
         clear_background(BEIGE);
         sim.draw_sim(true);
-        sim.update(true);
+        sim.update(false);
         // Yield to the macroquad event loop so the window can redraw.
         next_frame().await;
     }

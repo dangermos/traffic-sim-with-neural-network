@@ -116,6 +116,9 @@ pub struct Car {
     pub time_spent_off_road: f32,
     pub progress_to_goal: f32,
     pub distance_traveled: f32,
+    pub initial_distance_to_goal: f32,
+    stagnant_steps: u32,
+    pub remove_flag: bool,
 }
 
 impl Default for Car {
@@ -140,6 +143,9 @@ impl Default for Car {
             time_spent_off_road: 0.0,
             progress_to_goal: 0.0,
             distance_traveled: 0.0,
+            initial_distance_to_goal: 0.0,
+            stagnant_steps: 0,
+            remove_flag: false,
         }
     }
 }
@@ -195,50 +201,86 @@ impl Car {
 
     /// Spawns a Car on a Road with given `road_id`
     pub fn new_on_road(
-            road_grid: &RoadGrid,
-            road_id: RoadId,
-            color: Color,
-            network: Network,
-            car_id: u16,
-        ) -> Self {
-            let mut rng = ::rand::rng();
+        road_grid: &RoadGrid,
+        road_id: RoadId,
+        color: Color,
+        network: Network,
+        car_id: u16,
+    ) -> Self {
+        // Deterministic spawn: pick a starting point on the road based on the car id.
+        // This reduces evaluation noise across generations.
+        let viable: Vec<&Vec2> = road_grid
+            .roads
+            .iter()
+            .map(|x| x.get_first_point())
+            .filter(|x| **x != vec2(0.0, 0.0))
+            .collect();
 
-            let viable: Vec<&Vec2> = road_grid
-                .roads
-                .iter()
-                .map(|x| x.get_first_point())
-                .filter(|x| **x != vec2(0.0, 0.0))
-                .collect();
+        // Deterministic position along the chosen road, spread out to avoid collisions.
+        // Use golden ratio-based distribution for better spacing - this ensures cars
+        // are spread across the road even with sequential IDs on the same road.
+        let road_points = &road_grid[road_id].points;
+        let num_points = road_points.len();
 
-            let position =
-                road_grid[road_id].points[rng.random_range(0..road_grid[road_id].points.len())];
-            let rotation = 0.0;
+        const GOLDEN_RATIO_CONJUGATE: f32 = 0.618033988749895;
+        let fractional_pos = ((car_id as f32) * GOLDEN_RATIO_CONJUGATE) % 1.0;
 
-            let mut rand_dest = *viable[rng.random_range(0..viable.len())];
+        // Map to road points, but avoid the very start/end where intersections occur.
+        // Use indices from 5% to 95% of the road to avoid clustering at endpoints.
+        let safe_start = num_points / 20; // 5% into the road
+        let safe_end = num_points - (num_points / 20); // 95% of the road
+        let safe_range = safe_end.saturating_sub(safe_start).max(1);
+        let position_index = safe_start + ((fractional_pos * safe_range as f32) as usize);
+        let position_index = position_index.min(num_points - 1);
 
-            while rand_dest == position {
-                // Makes sure the destination is not just where the car started
-                rand_dest = *viable[rng.random_range(0..viable.len())];
-            }
+        let position = road_points[position_index];
 
-            let destination = Some(Destination {
-                position: rand_dest,
-            });
+        // Calculate initial rotation to face along the road direction
+        let rotation = if position_index + 1 < num_points {
+            let next_point = road_points[position_index + 1];
+            let direction = next_point - position;
+            direction.y.atan2(direction.x)
+        } else if position_index > 0 {
+            let prev_point = road_points[position_index - 1];
+            let direction = position - prev_point;
+            direction.y.atan2(direction.x)
+        } else {
+            0.0
+        };
 
-            let state = CarState::AIControlled(destination.unwrap_or(Destination { position }));
+        // Deterministic destination selection (based on car_id)
+        // Use a different prime to avoid correlation with position selection
+        let mut dest_index = ((car_id as usize).wrapping_mul(17).wrapping_add(11)) % viable.len();
+        let mut rand_dest = *viable[dest_index];
 
-            Self {
-                position,
-                rotation,
-                car_id,
-                road_id,
-                state,
-                color,
-                network,
-                destination,
-                ..Default::default()
-            }
+        // Make sure the destination is not exactly the spawn spot
+        while rand_dest == position {
+            dest_index = (dest_index + 1) % viable.len();
+            rand_dest = *viable[dest_index];
         }
+
+        let destination = Some(Destination {
+            position: rand_dest,
+        });
+
+        let state = CarState::AIControlled(destination.unwrap_or(Destination { position }));
+
+        // Use manhattan distance to match how progress_to_goal is accumulated.
+        let initial_distance_to_goal = manhattan_distance(&position, &rand_dest);
+
+        Self {
+            position,
+            rotation,
+            car_id,
+            road_id,
+            state,
+            color,
+            network,
+            destination,
+            initial_distance_to_goal,
+            ..Default::default()
+        }
+    }
 
     pub fn get_id(&self) -> u16 {
         self.car_id
@@ -276,10 +318,15 @@ impl Car {
 
     pub fn update<'a>(&'a mut self, road_grid: &'a RoadGrid, objects: &[CarObs], debug: bool) {
         let prev_distance = self.distance_to_destination;
-
+        let prev_pos = self.position;
 
         for object in objects {
+            // Skip self
             if self.car_id == object.id {
+                continue;
+            }
+            // Skip crashed or finished cars - they shouldn't cause new collisions
+            if object.crashed {
                 continue;
             }
 
@@ -318,8 +365,7 @@ impl Car {
         }
 
         match &self.state {
-            CarState::IDLE => {
-            }
+            CarState::IDLE => {}
 
             CarState::MovingToDestinationAuto(destination) => {
                 let eps: f32 = 1.0;
@@ -387,39 +433,44 @@ impl Car {
             CarState::AIControlled(destination) => {
                 let dt = 0.01;
 
-                const MAX_SPEED: f32 = 20.0;
-                const MAX_ANGULAR_VELOCITY: f32 = 2.0; // In radians
-                const ACCELERATION: f32 = 30.0;
+                // If we're very close to our destination, register arrival and transition.
+                let eps: f32 = 10.0;
+                if self.distance_to_destination < eps {
+                    // Arrived at Destination
+                    self.position = destination.position;
+                    self.destination = None;
+                    self.change_state(CarState::ReachedDestination);
+                } else {
+                    const MAX_SPEED: f32 = 80.0;
+                    const MAX_ANGULAR_VELOCITY: f32 = 3.0; // In radians
+                    const ACCELERATION: f32 = 120.0;
 
-                let inputs = [
-                    self.obstruction_score,
-                    self.on_roadness,
-                    self.goal_align,
-                    self.heading_error,
-                    self.speed,
-                ];
+                    let inputs = [
+                        self.obstruction_score, // 0 -> 1
+                        self.on_roadness,       // 0 -> 1
+                        self.goal_align,        // -1 -> 1
+                        self.heading_error,     // -1 -> 1
+                        self.speed / MAX_SPEED, // 0 -> 1
+                    ];
 
-                let result = self.network.propagate(inputs.to_vec());
+                    let result = self.network.propagate(inputs.to_vec());
 
-                let throttle = result[0].clamp(-1.0, 1.0);
-                let steering = result[1].clamp(-1.0, 1.0);
+                    let throttle = result[0].clamp(-1.0, 1.0);
+                    let steering = result[1].clamp(-1.0, 1.0);
 
-                assert!(
-                    result.len() == 2,
-                    "The network has more than 2 outputs, no good!"
-                );
+                    assert!(
+                        result.len() == 2,
+                        "The network has more than 2 outputs, no good!"
+                    );
 
-                // println!("The network says: {:?}", result);
+                    // Apply physics
+                    self.speed = (self.speed + throttle * ACCELERATION * dt).clamp(0.0, MAX_SPEED);
+                    self.rotation += steering * MAX_ANGULAR_VELOCITY * dt;
+                    self.distance_traveled += self.speed * dt;
+                    self.move_car(debug);
 
-                self.speed = (self.speed + throttle * ACCELERATION * dt).clamp(0.0, MAX_SPEED);
-                self.rotation += steering * MAX_ANGULAR_VELOCITY * dt;
-                self.distance_traveled += self.speed * dt;
-                self.move_car(debug);
-                
-
-                // println!("Hi from car {}, I've been alive for {:.0} seconds", self.get_id(), self.time_spent_alive);
-
-                self.time_spent_alive += 1.0;
+                    self.time_spent_alive += 1.0;
+                }
             }
 
             CarState::UserControlled(destination) => {
@@ -449,6 +500,23 @@ impl Car {
             CarState::Crashed => {
                 self.speed = 0.0;
             }
+        }
+
+        // Stagnation detection: mark cars as crashed if they don't move for a while.
+        // NOTE: We no longer set remove_flag here to avoid corrupting fitness attribution
+        // during evolution. Instead, stagnant cars transition to Crashed state.
+        const STAGNANT_MOVEMENT_EPS: f32 = 0.05;
+        const STAGNANT_FRAMES: u32 = 300;
+
+        let moved = (self.position - prev_pos).length();
+        if moved < STAGNANT_MOVEMENT_EPS && self.speed.abs() < 0.1 {
+            self.stagnant_steps = self.stagnant_steps.saturating_add(1);
+            if self.stagnant_steps > STAGNANT_FRAMES {
+                // Mark as crashed instead of removing - preserves population alignment
+                self.change_state(CarState::Crashed);
+            }
+        } else {
+            self.stagnant_steps = 0;
         }
     }
 
@@ -515,7 +583,8 @@ impl Car {
         let angles: [f32; 5] = [-0.4, -0.1, 0.0, 0.1, 0.4]; // radians
 
         self.obstruction_rays.clear();
-        self.obstruction_rays.reserve_exact(angles.len().saturating_sub(self.obstruction_rays.len()));
+        self.obstruction_rays
+            .reserve_exact(angles.len().saturating_sub(self.obstruction_rays.len()));
 
         for a in angles {
             let origin_local = vec2(dims.x * 0.5, 0.0); // front from center
@@ -709,6 +778,17 @@ pub fn draw_car(car: &Car, debug: bool) {
         }
     };
 
+    let mut display_color = car.color;
+    match car.state() {
+        CarState::ReachedDestination => {
+            display_color = Color::from_rgba(120, 210, 140, 220);
+        }
+        CarState::Crashed => {
+            display_color = Color::from_rgba(210, 80, 80, 200);
+        }
+        _ => {}
+    }
+
     draw_rectangle_ex(
         car.position.x,
         car.position.y,
@@ -717,39 +797,60 @@ pub fn draw_car(car: &Car, debug: bool) {
         DrawRectangleParams {
             offset: vec2(0.5, 0.5),
             rotation: car.rotation,
-            color: car.color,
+            color: display_color,
         },
     );
 
-    // boop
-
     if debug {
-        fn draw_obstruction_rays(car: &Car) {
-            let rays = &car.obstruction_rays;
+        // Outline aligned to rotation.
+        let hx = dims.0 * 0.5;
+        let hy = dims.1 * 0.5;
+        let corners = [vec2(-hx, -hy), vec2(hx, -hy), vec2(hx, hy), vec2(-hx, hy)];
 
-            let color = car.color.with_alpha(0.5);
-
-            for (idx, i) in rays.iter().enumerate() {
-                draw_line(i.0.x, i.0.y, i.1.x, i.1.y, 3.0, color);
-                draw_circle_lines(i.1.x, i.1.y, 10.0, 3.0, color);
-                draw_text(format!("{}", idx).as_str(), i.1.x, i.1.y, 34.0, GREEN);
-            }
+        for idx in 0..4 {
+            let a = car.world_from_local(corners[idx]);
+            let b = car.world_from_local(corners[(idx + 1) % 4]);
+            draw_line(a.x, a.y, b.x, b.y, 2.0, display_color.with_alpha(0.6));
         }
 
-        // draw_obstruction_rays(car); // For Drawing Obstruction Rays of each Car
-        draw_text(
-            &car.get_id().to_string(),
-            car.position.x + dims.0 / 2.0,
+        let nose = car.world_from_local(vec2(dims.0 * 0.6, 0.0));
+        draw_line(
+            car.position.x,
             car.position.y,
-            30.0,
-            GREEN,
-        ); // For drawing each Car ID next to itself
+            nose.x,
+            nose.y,
+            2.0,
+            display_color.with_alpha(0.8),
+        );
+
         draw_text(
-            format!("{:.0}", &car.position).as_str(),
-            car.position.x + dims.0 / 2.0,
-            car.position.y + 20.0,
-            20.0,
+            format!("#{}", car.get_id()).as_str(),
+            car.position.x - dims.0 * 0.2,
+            car.position.y - dims.1 * 0.4,
+            18.0,
             GREEN,
-        ); // For drawing each Car's position next to itself
+        );
+
+        // Destination hint: short arrow from car toward its goal (no full line).
+        if let Some(dest) = car.get_destination() {
+            let to_goal = dest.position - car.position;
+            let dist = to_goal.length();
+            if dist > 1.0 {
+                let dir = to_goal / dist;
+                let arrow_len = dist.min(40.0);
+                let head_len = 8.0;
+                let start = car.position;
+                let end = start + dir * arrow_len;
+                let arrow_color = Color::from_rgba(255, 210, 100, 220);
+
+                draw_line(start.x, start.y, end.x, end.y, 2.0, arrow_color);
+
+                let head_dir = -dir * head_len;
+                let left = end + rotate(head_dir, 0.6);
+                let right = end + rotate(head_dir, -0.6);
+                draw_line(end.x, end.y, left.x, left.y, 2.0, arrow_color);
+                draw_line(end.x, end.y, right.x, right.y, 2.0, arrow_color);
+            }
+        }
     }
 }

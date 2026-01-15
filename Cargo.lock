@@ -155,6 +155,7 @@ dependencies = [
  "neural",
  "rand",
  "rand_chacha",
+ "rayon",
  "serde",
  "serde_json",
  "traffic",
@@ -205,6 +206,7 @@ dependencies = [
  "rand",
  "rayon",
  "serde",
+ "serde_json",
  "traffic",
 ]
 

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, hash::Hash, ops::Index};
 
 use macroquad::{
-    color::{Color, PINK},
+    color::Color,
     math::Vec2,
     shapes::{draw_circle, draw_line},
 };
@@ -185,6 +185,9 @@ impl Road {
 pub fn draw_road(road: &Road, debug: bool) {
     const THICKNESS: f32 = 60.0;
     const ROAD_COLOR: Color = Color::from_rgba(255, 255, 255, 50);
+    const ENDPOINT_RADIUS: f32 = 6.0;
+    const START_COLOR: Color = Color::from_rgba(120, 200, 255, 180);
+    const END_COLOR: Color = Color::from_rgba(255, 140, 200, 200);
 
     let (_start, _end) = (
         road.points
@@ -203,12 +206,14 @@ pub fn draw_road(road: &Road, debug: bool) {
         draw_line(curr.x, curr.y, next.x, next.y, THICKNESS, ROAD_COLOR);
 
         if debug {
-            draw_circle(
-                road.points.last().unwrap().x,
-                road.points.last().unwrap().y,
-                10.0,
-                PINK,
-            );
+            if i == 0 {
+                let start = road.points.first().unwrap();
+                draw_circle(start.x, start.y, ENDPOINT_RADIUS, START_COLOR);
+            }
+            if i == road.points.len() - 2 {
+                let end = road.points.last().unwrap();
+                draw_circle(end.x, end.y, ENDPOINT_RADIUS, END_COLOR);
+            }
         }
     }
 }
