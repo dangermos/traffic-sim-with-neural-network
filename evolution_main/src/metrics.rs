@@ -28,22 +28,25 @@ pub struct GenerationMetrics {
     pub num_crashed: u32,
     pub num_reached_destination: u32,
     pub num_stagnant: u32,
+    pub num_active: u32,
     pub mean_time_alive: f32,
 
     // Efficiency
     pub mean_efficiency: f32,
-
-    // Road adherence
-    pub mean_time_off_road: f32,
+    pub best_efficiency: f32,
 
     // Population diversity
     pub gene_diversity: f32,
+
+    // Speed metrics
+    pub mean_speed: f32,
+    pub max_speed: f32,
 }
 
 impl GenerationMetrics {
     /// Compute metrics from the current population and simulation state.
     pub fn compute(generation: u32, population: &Population, cars: &[Car]) -> Self {
-        let n = cars.len() as f32;
+        let n = cars.len().max(1) as f32;
 
         // Fitness metrics
         let fitnesses: Vec<f32> = population.individuals.iter().map(|i| i.fitness).collect();
@@ -53,7 +56,7 @@ impl GenerationMetrics {
 
         let mut sorted_fit = fitnesses.clone();
         sorted_fit.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let median_fitness = sorted_fit[sorted_fit.len() / 2];
+        let median_fitness = sorted_fit.get(sorted_fit.len() / 2).copied().unwrap_or(0.0);
 
         let variance = fitnesses
             .iter()
@@ -84,24 +87,33 @@ impl GenerationMetrics {
             .iter()
             .filter(|c| matches!(c.state(), CarState::ReachedDestination))
             .count() as u32;
-        let num_stagnant = cars.iter().filter(|c| c.distance_traveled < 5.0).count() as u32;
+        let num_stagnant = cars
+            .iter()
+            .filter(|c| matches!(c.state(), CarState::Stagnant))
+            .count() as u32;
+        let num_active = cars.len() as u32 - num_crashed - num_reached_destination - num_stagnant;
 
         // Time metrics
         let mean_time_alive = cars.iter().map(|c| c.time_spent_alive).sum::<f32>() / n;
-        let mean_time_off_road = cars.iter().map(|c| c.time_spent_off_road).sum::<f32>() / n;
 
         // Efficiency: progress / distance (how direct is the path)
-        let mean_efficiency = cars
+        let efficiencies: Vec<f32> = cars
             .iter()
             .map(|c| {
                 if c.distance_traveled > 0.0 {
-                    c.progress_to_goal / c.distance_traveled
+                    (c.progress_to_goal / c.distance_traveled).clamp(0.0, 1.0)
                 } else {
                     0.0
                 }
             })
-            .sum::<f32>()
-            / n;
+            .collect();
+        let mean_efficiency = efficiencies.iter().sum::<f32>() / n;
+        let best_efficiency = efficiencies.iter().cloned().fold(0.0f32, f32::max);
+
+        // Speed metrics
+        let speeds: Vec<f32> = cars.iter().map(|c| c.speed).collect();
+        let mean_speed = speeds.iter().sum::<f32>() / n;
+        let max_speed = speeds.iter().cloned().fold(0.0f32, f32::max);
 
         // Genetic diversity: average standard deviation across all gene positions
         let gene_diversity = if !population.individuals.is_empty()
@@ -113,10 +125,10 @@ impl GenerationMetrics {
                     let vals: Vec<f32> = population
                         .individuals
                         .iter()
-                        .map(|ind| ind.genes[i])
+                        .map(|ind| ind.genes.get(i).copied().unwrap_or(0.0))
                         .collect();
-                    let m = vals.iter().sum::<f32>() / vals.len() as f32;
-                    let var = vals.iter().map(|v| (v - m).powi(2)).sum::<f32>() / vals.len() as f32;
+                    let m = vals.iter().sum::<f32>() / vals.len().max(1) as f32;
+                    let var = vals.iter().map(|v| (v - m).powi(2)).sum::<f32>() / vals.len().max(1) as f32;
                     var.sqrt()
                 })
                 .sum();
@@ -139,17 +151,20 @@ impl GenerationMetrics {
             num_crashed,
             num_reached_destination,
             num_stagnant,
+            num_active,
             mean_time_alive,
             mean_efficiency,
-            mean_time_off_road,
+            best_efficiency,
             gene_diversity,
+            mean_speed,
+            max_speed,
         }
     }
 
     /// Convert metrics to a CSV row string.
     pub fn to_csv_row(&self) -> String {
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             self.generation,
             self.best_fitness,
             self.mean_fitness,
@@ -163,16 +178,19 @@ impl GenerationMetrics {
             self.num_crashed,
             self.num_reached_destination,
             self.num_stagnant,
+            self.num_active,
             self.mean_time_alive,
-            self.mean_time_off_road,
             self.mean_efficiency,
+            self.best_efficiency,
             self.gene_diversity,
+            self.mean_speed,
+            self.max_speed,
         )
     }
 }
 
 /// CSV header for metrics file.
-pub const CSV_HEADER: &str = "generation,best_fitness,mean_fitness,median_fitness,worst_fitness,fitness_std_dev,max_distance,mean_distance,max_progress,mean_progress,num_crashed,num_reached,num_stagnant,mean_time_alive,mean_time_off_road,mean_efficiency,gene_diversity\n";
+pub const CSV_HEADER: &str = "generation,best_fitness,mean_fitness,median_fitness,worst_fitness,fitness_std_dev,max_distance,mean_distance,max_progress,mean_progress,num_crashed,num_reached,num_stagnant,num_active,mean_time_alive,mean_efficiency,best_efficiency,gene_diversity,mean_speed,max_speed\n";
 
 /// Writer for streaming metrics to a CSV file.
 pub struct MetricsWriter {
@@ -216,4 +234,103 @@ pub fn print_progress(metrics: &GenerationMetrics) {
         metrics.num_reached_destination,
         metrics.gene_diversity,
     );
+}
+
+/// Summary statistics for end-of-run reporting
+#[derive(Debug, Clone)]
+pub struct EvolutionSummary {
+    pub total_generations: u32,
+    pub initial_best_fitness: f32,
+    pub final_best_fitness: f32,
+    pub peak_best_fitness: f32,
+    pub peak_generation: u32,
+    pub final_mean_fitness: f32,
+    pub final_stagnant_pct: f32,
+    pub final_crashed_pct: f32,
+    pub final_reached_pct: f32,
+    pub initial_efficiency: f32,
+    pub final_efficiency: f32,
+    pub peak_efficiency: f32,
+    pub initial_diversity: f32,
+    pub final_diversity: f32,
+}
+
+impl EvolutionSummary {
+    /// Build a summary from a list of generation metrics
+    pub fn from_metrics(metrics: &[GenerationMetrics]) -> Option<Self> {
+        if metrics.is_empty() {
+            return None;
+        }
+
+        let first = metrics.first()?;
+        let last = metrics.last()?;
+
+        let (peak_best_fitness, peak_generation) = metrics
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| {
+                a.best_fitness
+                    .partial_cmp(&b.best_fitness)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, m)| (m.best_fitness, i as u32))?;
+
+        let peak_efficiency = metrics
+            .iter()
+            .map(|m| m.best_efficiency)
+            .fold(0.0f32, f32::max);
+
+        let total_cars = (last.num_crashed + last.num_reached_destination + last.num_stagnant + last.num_active).max(1) as f32;
+
+        Some(Self {
+            total_generations: metrics.len() as u32,
+            initial_best_fitness: first.best_fitness,
+            final_best_fitness: last.best_fitness,
+            peak_best_fitness,
+            peak_generation,
+            final_mean_fitness: last.mean_fitness,
+            final_stagnant_pct: 100.0 * last.num_stagnant as f32 / total_cars,
+            final_crashed_pct: 100.0 * last.num_crashed as f32 / total_cars,
+            final_reached_pct: 100.0 * last.num_reached_destination as f32 / total_cars,
+            initial_efficiency: first.best_efficiency,
+            final_efficiency: last.best_efficiency,
+            peak_efficiency,
+            initial_diversity: first.gene_diversity,
+            final_diversity: last.gene_diversity,
+        })
+    }
+
+    /// Print a formatted summary report
+    pub fn print(&self) {
+        println!("\n============================================================");
+        println!("                    EVOLUTION SUMMARY");
+        println!("============================================================\n");
+
+        println!("Total Generations: {}\n", self.total_generations);
+
+        println!("Fitness:");
+        println!("  Initial Best:  {:.4}", self.initial_best_fitness);
+        println!("  Final Best:    {:.4}", self.final_best_fitness);
+        println!(
+            "  Peak Best:     {:.4} (gen {})",
+            self.peak_best_fitness, self.peak_generation
+        );
+        println!("  Final Mean:    {:.4}\n", self.final_mean_fitness);
+
+        println!("Behavior (final generation):");
+        println!("  Stagnant:      {:.1}%", self.final_stagnant_pct);
+        println!("  Crashed:       {:.1}%", self.final_crashed_pct);
+        println!("  Reached Goal:  {:.1}%\n", self.final_reached_pct);
+
+        println!("Efficiency:");
+        println!("  Initial:       {:.4}", self.initial_efficiency);
+        println!("  Final:         {:.4}", self.final_efficiency);
+        println!("  Peak:          {:.4}\n", self.peak_efficiency);
+
+        println!("Genetic Diversity:");
+        println!("  Initial:       {:.4}", self.initial_diversity);
+        println!("  Final:         {:.4}", self.final_diversity);
+
+        println!("\n============================================================\n");
+    }
 }

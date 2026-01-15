@@ -159,7 +159,7 @@ pub fn test_sensors<T: Rng>(_center: Vec2, _screen: Vec2, rng: &mut T) -> Simula
 /// - Enough cars to create interesting collision avoidance scenarios
 /// - Roads of varying lengths to test both short and long navigation
 pub fn overnight_training<T: Rng>(rng: &mut T) -> Simulation {
-    const NUM_CARS: usize = 200;
+    const CARS_PER_ROAD: usize = 4;
     
     // Build a proper city grid with intersections
     let city_center = vec2(960.0, 540.0);
@@ -234,7 +234,9 @@ pub fn overnight_training<T: Rng>(rng: &mut T) -> Simulation {
     ));
     
     let road_grid = RoadGrid::new(roads);
-    let road_count = road_grid.roads.len();
+    let road_count = road_grid.roads.len().max(1);
+    // Scale car count with road count to avoid overcrowding.
+    let num_cars = road_count * CARS_PER_ROAD;
     
     let topology = [
         LayerTopology { neurons: 5 },
@@ -243,7 +245,7 @@ pub fn overnight_training<T: Rng>(rng: &mut T) -> Simulation {
     ];
     
     let cars = CarWorld {
-        cars: (0..NUM_CARS)
+        cars: (0..num_cars)
             .map(|x| {
                 let network = Network::new_random(&topology, rng);
                 let (r, g, b, _a): (u8, u8, u8, u8) = rng.random();

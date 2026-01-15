@@ -49,12 +49,34 @@ if [[ "$num" =~ ^[0-9]+$ ]]; then
                 $PYTHON_CMD -m pip install -q -r visualization/requirements.txt 2>/dev/null
             fi
 
-            # Run visualization script
-            if [[ -f "metrics.csv" ]]; then
-                $PYTHON_CMD visualization/plot_metrics.py metrics.csv
-                echo -e "${GREEN}Visualization saved to evolution_progress.png${NC}"
+            # Run visualization scripts
+            if [[ -f "output/serialization/metrics.csv" ]]; then
+                echo -e "${YELLOW}Generating 2D dashboard...${NC}"
+                $PYTHON_CMD visualization/plot_metrics.py output/serialization/metrics.csv
+
+                echo -e "${YELLOW}Generating static 3D plots...${NC}"
+                $PYTHON_CMD visualization/plot_3d.py output/serialization/metrics.csv
+
+                echo -e "${YELLOW}Generating interactive 3D plots...${NC}"
+                $PYTHON_CMD visualization/plot_3d_interactive.py output/serialization/metrics.csv
+
+                echo ""
+                echo -e "${GREEN}Visualizations saved!${NC}"
+                echo ""
+                echo "  Static Images (PNG) - output/png/:"
+                echo "    - evolution_progress.png (2D dashboard)"
+                echo "    - 3d_fitness_landscape.png"
+                echo "    - 3d_behavior_space.png"
+                echo "    - 3d_diversity_fitness.png"
+                echo "    - 3d_population_dynamics.png"
+                echo ""
+                echo "  Interactive (HTML - open in browser) - output/html/:"
+                echo "    - 3d_fitness_interactive.html"
+                echo "    - 3d_behavior_interactive.html"
+                echo "    - 3d_diversity_interactive.html"
+                echo "    - 3d_dashboard_interactive.html"
             else
-                echo "Warning: metrics.csv not found. No visualization generated."
+                echo "Warning: output/serialization/metrics.csv not found. No visualization generated."
             fi
         fi
         echo ""

@@ -41,13 +41,22 @@ def plot_fitness_std_dev(df: pd.DataFrame, ax: Axes) -> None:
 
 def plot_behavior_distribution(df: pd.DataFrame, ax: Axes) -> None:
     """Plot stacked area chart of car behaviors."""
+    # Handle different column names
+    stagnant = df.num_stagnant if 'num_stagnant' in df.columns else 0
+    crashed = df.num_crashed if 'num_crashed' in df.columns else 0
+    reached = df.num_reached if 'num_reached' in df.columns else (
+        df.num_reached_destination if 'num_reached_destination' in df.columns else 0
+    )
+    active = df.num_active if 'num_active' in df.columns else 0
+
     ax.stackplot(
         df.generation,
-        df.num_stagnant,
-        df.num_crashed,
-        df.num_reached,
-        labels=["Stagnant", "Crashed", "Reached Destination"],
-        colors=["#ff6b6b", "#ffd93d", "#6bcb77"],
+        reached,
+        active,
+        stagnant,
+        crashed,
+        labels=["Reached", "Active", "Stagnant", "Crashed"],
+        colors=["#78d28c", "#5dade2", "#e6c850", "#d25050"],
         alpha=0.8,
     )
     ax.legend(loc="upper right")
@@ -58,17 +67,20 @@ def plot_behavior_distribution(df: pd.DataFrame, ax: Axes) -> None:
 
 
 def plot_efficiency(df: pd.DataFrame, ax: Axes) -> None:
-    """Plot mean efficiency (progress / distance traveled)."""
-    ax.plot(df.generation, df.mean_efficiency, color="teal", linewidth=1.5)
+    """Plot mean and best efficiency (progress / distance traveled)."""
+    ax.plot(df.generation, df.mean_efficiency, color="teal", linewidth=1.5, label="Mean")
+    if 'best_efficiency' in df.columns:
+        ax.plot(df.generation, df.best_efficiency, color="darkgreen", linewidth=1.5,
+                linestyle="--", label="Best", alpha=0.8)
     ax.axhline(
-        y=1.0, color="red", linestyle="--", alpha=0.5, label="Perfect efficiency"
+        y=1.0, color="red", linestyle=":", alpha=0.5, label="Perfect efficiency"
     )
     ax.set_xlabel("Generation")
     ax.set_ylabel("Efficiency (progress / distance)")
-    ax.set_title("Mean Path Efficiency")
+    ax.set_title("Path Efficiency")
     ax.legend(loc="lower right")
     ax.grid(True, alpha=0.3)
-    ax.set_ylim(bottom=0)
+    ax.set_ylim(bottom=0, top=1.1)
 
 
 def plot_genetic_diversity(df: pd.DataFrame, ax: Axes) -> None:
@@ -112,33 +124,48 @@ def plot_exploration_vs_exploitation(df: pd.DataFrame, ax: Axes) -> None:
     ax.grid(True, alpha=0.3)
 
 
-def plot_survival_metrics(df: pd.DataFrame, ax: Axes) -> None:
-    """Plot mean time alive and time off road."""
-    ax2 = ax.twinx()
+def plot_speed_metrics(df: pd.DataFrame, ax: Axes) -> None:
+    """Plot speed metrics over generations."""
+    if 'mean_speed' in df.columns:
+        ax.plot(
+            df.generation,
+            df.mean_speed,
+            label="Mean Speed",
+            color="navy",
+            linewidth=1.5,
+        )
+    if 'max_speed' in df.columns:
+        ax.plot(
+            df.generation,
+            df.max_speed,
+            label="Max Speed",
+            color="dodgerblue",
+            linewidth=1.5,
+            linestyle="--",
+            alpha=0.7,
+        )
 
-    line1 = ax.plot(
+    ax.set_xlabel("Generation")
+    ax.set_ylabel("Speed")
+    ax.legend(loc="lower right")
+    ax.set_title("Speed Metrics")
+    ax.grid(True, alpha=0.3)
+
+
+def plot_survival_metrics(df: pd.DataFrame, ax: Axes) -> None:
+    """Plot mean time alive."""
+    ax.plot(
         df.generation,
         df.mean_time_alive,
         label="Mean Time Alive",
         color="navy",
         linewidth=1.5,
     )
-    line2 = ax2.plot(
-        df.generation,
-        df.mean_time_off_road,
-        label="Mean Time Off Road",
-        color="orangered",
-        linewidth=1.5,
-    )
 
     ax.set_xlabel("Generation")
-    ax.set_ylabel("Time Alive (frames)", color="navy")
-    ax2.set_ylabel("Time Off Road (frames)", color="orangered")
-
-    lines = line1 + line2
-    labels = [line.get_label() for line in lines]
-    ax.legend(lines, labels, loc="lower right")
+    ax.set_ylabel("Time Alive (frames)")
     ax.set_title("Survival Metrics")
+    ax.legend(loc="lower right")
     ax.grid(True, alpha=0.3)
 
 
@@ -155,7 +182,12 @@ def plot_all_metrics(
     plot_efficiency(df, axes[0, 3])
     plot_genetic_diversity(df, axes[1, 0])
     plot_exploration_vs_exploitation(df, axes[1, 1])
-    plot_survival_metrics(df, axes[1, 2])
+
+    # Use speed metrics if available, otherwise survival
+    if 'mean_speed' in df.columns:
+        plot_speed_metrics(df, axes[1, 2])
+    else:
+        plot_survival_metrics(df, axes[1, 2])
 
     # Summary statistics text box
     ax_text = axes[1, 3]
@@ -163,6 +195,18 @@ def plot_all_metrics(
 
     final = df.iloc[-1]
     initial = df.iloc[0]
+
+    # Safely get behavior counts
+    num_stagnant = int(final.get('num_stagnant', 0))
+    num_crashed = int(final.get('num_crashed', 0))
+    num_reached = int(final.get('num_reached', final.get('num_reached_destination', 0)))
+    num_active = int(final.get('num_active', 0))
+
+    # Calculate improvement safely
+    if initial.best_fitness != 0:
+        improvement = ((final.best_fitness - initial.best_fitness) / abs(initial.best_fitness)) * 100
+    else:
+        improvement = 0 if final.best_fitness == 0 else float('inf')
 
     summary_text = f"""
     Summary Statistics
@@ -172,14 +216,15 @@ def plot_all_metrics(
 
     Initial Best Fitness: {initial.best_fitness:.2f}
     Final Best Fitness: {final.best_fitness:.2f}
-    Improvement: {((final.best_fitness - initial.best_fitness) / max(initial.best_fitness, 0.01)) * 100:.1f}%
+    Improvement: {improvement:.1f}%
 
     Initial Mean Fitness: {initial.mean_fitness:.2f}
     Final Mean Fitness: {final.mean_fitness:.2f}
 
-    Final Stagnant: {int(final.num_stagnant)}
-    Final Crashed: {int(final.num_crashed)}
-    Final Reached Goal: {int(final.num_reached)}
+    Final Active: {num_active}
+    Final Stagnant: {num_stagnant}
+    Final Crashed: {num_crashed}
+    Final Reached Goal: {num_reached}
 
     Final Gene Diversity: {final.gene_diversity:.4f}
     Final Efficiency: {final.mean_efficiency:.4f}
@@ -245,21 +290,30 @@ def print_summary(df: pd.DataFrame) -> None:
 
     print("\nBehavior (final generation):")
     final = df.iloc[-1]
-    total_cars = final.num_stagnant + final.num_crashed + final.num_reached
-    print(
-        f"  Stagnant:      {int(final.num_stagnant)} ({100 * final.num_stagnant / total_cars:.1f}%)"
-    )
-    print(
-        f"  Crashed:       {int(final.num_crashed)} ({100 * final.num_crashed / total_cars:.1f}%)"
-    )
-    print(
-        f"  Reached Goal:  {int(final.num_reached)} ({100 * final.num_reached / total_cars:.1f}%)"
-    )
+
+    # Safely get counts
+    num_stagnant = final.get('num_stagnant', 0)
+    num_crashed = final.get('num_crashed', 0)
+    num_reached = final.get('num_reached', final.get('num_reached_destination', 0))
+    num_active = final.get('num_active', 0)
+
+    total_cars = num_stagnant + num_crashed + num_reached + num_active
+
+    if total_cars > 0:
+        print(f"  Active:        {int(num_active)} ({100 * num_active / total_cars:.1f}%)")
+        print(f"  Stagnant:      {int(num_stagnant)} ({100 * num_stagnant / total_cars:.1f}%)")
+        print(f"  Crashed:       {int(num_crashed)} ({100 * num_crashed / total_cars:.1f}%)")
+        print(f"  Reached Goal:  {int(num_reached)} ({100 * num_reached / total_cars:.1f}%)")
+    else:
+        print("  No car data available")
 
     print("\nEfficiency:")
     print(f"  Initial:       {df.iloc[0].mean_efficiency:.4f}")
     print(f"  Final:         {df.iloc[-1].mean_efficiency:.4f}")
-    print(f"  Peak:          {df.mean_efficiency.max():.4f}")
+    if 'best_efficiency' in df.columns:
+        print(f"  Peak Best:     {df.best_efficiency.max():.4f}")
+    else:
+        print(f"  Peak:          {df.mean_efficiency.max():.4f}")
 
     print("\nGenetic Diversity:")
     print(f"  Initial:       {df.iloc[0].gene_diversity:.4f}")
@@ -269,23 +323,25 @@ def print_summary(df: pd.DataFrame) -> None:
     if len(df) > 100:
         recent = df.tail(50)
         earlier = df.iloc[-100:-50]
-        improvement = recent.best_fitness.max() - earlier.best_fitness.max()
-        if improvement < 0.01 * earlier.best_fitness.max():
-            print(
-                f"\n⚠️  Warning: Fitness appears to have plateaued in recent generations"
-            )
+        if earlier.best_fitness.max() > 0:
+            improvement = recent.best_fitness.max() - earlier.best_fitness.max()
+            if improvement < 0.01 * earlier.best_fitness.max():
+                print(
+                    f"\n⚠️  Warning: Fitness appears to have plateaued in recent generations"
+                )
 
     # Detect diversity collapse
-    if df.iloc[-1].gene_diversity < 0.1 * df.iloc[0].gene_diversity:
-        print(f"\n⚠️  Warning: Genetic diversity has collapsed significantly")
+    if df.iloc[0].gene_diversity > 0:
+        if df.iloc[-1].gene_diversity < 0.1 * df.iloc[0].gene_diversity:
+            print(f"\n⚠️  Warning: Genetic diversity has collapsed significantly")
 
     print("\n" + "=" * 60)
 
 
 def main():
     """Main entry point for the visualization script."""
-    # Default path - look in parent directory where evolution_main runs
-    default_path = Path(__file__).parent.parent / "metrics.csv"
+    # Default path - look in output/serialization directory
+    default_path = Path(__file__).parent.parent / "output" / "serialization" / "metrics.csv"
 
     if len(sys.argv) > 1:
         csv_path = sys.argv[1]
@@ -304,7 +360,9 @@ def main():
 
     print_summary(df)
 
-    output_path = Path(csv_path).parent / "evolution_progress.png"
+    output_dir = Path(csv_path).parent / "output" / "png"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "evolution_progress.png"
     plot_all_metrics(df, str(output_path))
 
 

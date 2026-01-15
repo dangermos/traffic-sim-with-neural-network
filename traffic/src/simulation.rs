@@ -5,11 +5,11 @@ use crate::{
     road::RoadGrid,
 };
 use macroquad::{
-    color::{Color, GREEN, PINK},
+    color::{Color, PINK},
     math::Vec2,
     prelude::set_default_camera,
-    shapes::{draw_circle, draw_line, draw_rectangle},
-    text::draw_text,
+    shapes::{draw_circle, draw_line, draw_rectangle, draw_rectangle_lines},
+    text::{draw_text, measure_text},
 };
 use rayon::prelude::*;
 
@@ -57,7 +57,10 @@ impl Simulation {
                 pos: x.position,
                 rot: x.rotation,
                 speed: x.speed,
-                crashed: matches!(x.state(), CarState::Crashed | CarState::ReachedDestination),
+                crashed: matches!(
+                    x.state(),
+                    CarState::Crashed | CarState::ReachedDestination | CarState::Stagnant
+                ),
             })
         });
 
@@ -78,6 +81,7 @@ impl Simulation {
             let mut alive = 0usize;
             let mut reached = 0usize;
             let mut crashed = 0usize;
+            let mut stagnant = 0usize;
             let mut best_progress = f32::NEG_INFINITY;
             let mut best_car = None;
 
@@ -85,6 +89,7 @@ impl Simulation {
                 match car.state() {
                     CarState::Crashed => crashed += 1,
                     CarState::ReachedDestination => reached += 1,
+                    CarState::Stagnant => stagnant += 1,
                     _ => alive += 1,
                 }
 
@@ -121,59 +126,115 @@ impl Simulation {
 
             // Switch to screen-space for HUD so it stays pinned to the viewport.
             set_default_camera();
+            let total = alive + reached + stagnant + crashed;
+            let total_f = total.max(1) as f32;
 
-            let lines = [
-                format!(
-                    "Cars: alive {} | reached {} | crashed {}",
-                    alive, reached, crashed
-                ),
-                format!("Avg speed: {:.1}", avg_speed),
-                format!("Best progress: {:.0}", best_progress.max(0.0)),
-            ];
+            let panel_bg = Color::from_rgba(18, 24, 30, 210);
+            let panel_border = Color::from_rgba(70, 90, 110, 200);
+            let panel_shadow = Color::from_rgba(0, 0, 0, 80);
+            let accent_color = Color::from_rgba(80, 190, 160, 220);
+            let text_primary = Color::from_rgba(220, 235, 250, 235);
+            let text_muted = Color::from_rgba(150, 165, 180, 210);
 
+            let active_color = Color::from_rgba(90, 160, 230, 220);
             let reached_color = Color::from_rgba(120, 210, 140, 220);
+            let stagnant_color = Color::from_rgba(230, 200, 80, 220);
             let crashed_color = Color::from_rgba(210, 80, 80, 220);
 
-            let panel_x = 16.0;
-            let panel_y = 16.0;
-            let padding = 12.0;
+            let panel_x = 18.0;
+            let panel_y = 18.0;
+            let panel_w = 340.0;
+            let padding = 14.0;
+            let title_size = 22.0;
+            let text_size = 18.0;
+            let footer_size = 16.0;
             let line_h = 22.0;
-            let legend_icon = 12.0;
-            let legend_spacing = 8.0;
+            let bar_h = 10.0;
+            let gap = 8.0;
 
-            let legend = [("Reached", reached_color), ("Crashed", crashed_color)];
+            let rows = [
+                ("Active", alive, active_color),
+                ("Reached", reached, reached_color),
+                ("Stagnant", stagnant, stagnant_color),
+                ("Crashed", crashed, crashed_color),
+            ];
 
-            let panel_w = 300.0;
-            let panel_h = padding * 2.0
-                + line_h * lines.len() as f32
-                + legend_spacing
-                + (legend_icon + legend_spacing) * legend.len() as f32;
+            let header_h = title_size + footer_size + 12.0;
+            let stats_h = rows.len() as f32 * line_h;
+            let footer_h = 2.0 * line_h;
+            let panel_h = padding * 2.0 + header_h + stats_h + gap + bar_h + gap + footer_h;
 
-            draw_rectangle(
-                panel_x,
-                panel_y,
-                panel_w,
-                panel_h,
-                Color::from_rgba(20, 30, 40, 180),
-            );
+            draw_rectangle(panel_x + 4.0, panel_y + 4.0, panel_w, panel_h, panel_shadow);
+            draw_rectangle(panel_x, panel_y, panel_w, panel_h, panel_bg);
+            draw_rectangle(panel_x, panel_y, panel_w, 3.0, accent_color);
+            draw_rectangle_lines(panel_x, panel_y, panel_w, panel_h, 1.0, panel_border);
 
-            let start_x = panel_x + padding;
-            let start_y = panel_y + padding + line_h;
+            let mut cursor_y = panel_y + padding + title_size;
+            draw_text("SIM STATUS", panel_x + padding, cursor_y, title_size, text_primary);
 
-            for (i, line) in lines.iter().enumerate() {
-                draw_text(line, start_x, start_y + i as f32 * line_h, 22.0, GREEN);
+            cursor_y += footer_size + 6.0;
+            let total_text = format!("Total cars: {}", total);
+            draw_text(&total_text, panel_x + padding, cursor_y, footer_size, text_muted);
+
+            cursor_y += line_h;
+
+            for (i, (label, count, color)) in rows.iter().enumerate() {
+                let y = cursor_y + i as f32 * line_h;
+                let pct = if total > 0 {
+                    (*count as f32 / total_f) * 100.0
+                } else {
+                    0.0
+                };
+                let value_text = format!("{} ({:.0}%)", count, pct);
+
+                draw_rectangle(panel_x + padding, y - 10.0, 10.0, 10.0, *color);
+                draw_text(label, panel_x + padding + 16.0, y, text_size, text_primary);
+
+                let dims = measure_text(&value_text, None, text_size as u16, 1.0);
+                draw_text(
+                    &value_text,
+                    panel_x + panel_w - padding - dims.width,
+                    y,
+                    text_size,
+                    text_primary,
+                );
             }
 
-            let legend_start_y = start_y + line_h * lines.len() as f32 + legend_spacing;
-            for (i, (label, color)) in legend.iter().enumerate() {
-                let y = legend_start_y + i as f32 * (legend_icon + legend_spacing);
-                draw_rectangle(start_x, y, legend_icon, legend_icon, *color);
+            let bar_x = panel_x + padding;
+            let bar_y = cursor_y + rows.len() as f32 * line_h + gap;
+            let bar_w = panel_w - padding * 2.0;
+            draw_rectangle(bar_x, bar_y, bar_w, bar_h, Color::from_rgba(30, 40, 50, 220));
+            draw_rectangle_lines(bar_x, bar_y, bar_w, bar_h, 1.0, panel_border);
+
+            let mut bar_cursor = bar_x;
+            for (_label, count, color) in rows.iter() {
+                let width = if total > 0 {
+                    bar_w * (*count as f32 / total_f)
+                } else {
+                    0.0
+                };
+                if width > 0.0 {
+                    draw_rectangle(bar_cursor, bar_y, width, bar_h, *color);
+                }
+                bar_cursor += width;
+            }
+
+            let footer_start_y = bar_y + bar_h + gap + footer_size;
+            let footer_rows = [
+                ("Avg speed", format!("{:.1}", avg_speed)),
+                ("Best progress", format!("{:.0}", best_progress.max(0.0))),
+            ];
+
+            for (i, (label, value)) in footer_rows.iter().enumerate() {
+                let y = footer_start_y + i as f32 * line_h;
+                draw_text(label, panel_x + padding, y, footer_size, text_muted);
+                let dims = measure_text(value, None, footer_size as u16, 1.0);
                 draw_text(
-                    label,
-                    start_x + legend_icon + 8.0,
-                    y + legend_icon,
-                    20.0,
-                    GREEN,
+                    value,
+                    panel_x + panel_w - padding - dims.width,
+                    y,
+                    footer_size,
+                    text_primary,
                 );
             }
         }
@@ -189,7 +250,7 @@ impl Simulation {
             speed: car.speed,
             crashed: matches!(
                 car.state(),
-                CarState::Crashed | CarState::ReachedDestination
+                CarState::Crashed | CarState::ReachedDestination | CarState::Stagnant
             ),
         }));
 
@@ -210,7 +271,7 @@ impl Simulation {
 
         // NOTE: We no longer remove cars mid-simulation to preserve alignment between
         // population.individuals and sim.cars.cars for correct fitness attribution.
-        // Stagnant cars now transition to Crashed state instead of being removed.
+        // Stagnant cars now transition to Stagnant state instead of being removed.
         // self.cars.cars.retain(|c| !c.remove_flag);
     }
 }

@@ -15,6 +15,20 @@ use traffic::{
     simulation::Simulation,
 };
 
+// Helper trait to access distance_to_destination from Car
+// (if not already public, we compute it from available data)
+trait CarFitnessExt {
+    fn distance_to_destination(&self) -> f32;
+}
+
+impl CarFitnessExt for Car {
+    fn distance_to_destination(&self) -> f32 {
+        // Use the car's tracked progress to estimate current distance
+        // current_distance ≈ initial_distance - progress_made
+        (self.initial_distance_to_goal - self.progress_to_goal).max(0.0)
+    }
+}
+
 /*
 
 The loop for neuroevolution is
@@ -29,11 +43,24 @@ The loop for neuroevolution is
 
 */
 
-const COMPLETION_REWARD: f32 = 100.0; // Reward for % of journey completed
-const EFFICIENCY_REWARD: f32 = 50.0; // Reward for direct paths
-const OFF_ROAD_PENALTY: f32 = 2.0;
-const CRASH_PENALTY: f32 = 0.1;
-const IDLE_PENALTY: f32 = 10.0;
+// === FITNESS WEIGHTS ===
+// Primary rewards
+const COMPLETION_REWARD: f32 = 100.0;      // Reward for % of journey completed
+const DESTINATION_BONUS: f32 = 75.0;       // Bonus for actually reaching destination
+const FINAL_PROXIMITY_REWARD: f32 = 30.0;  // Reward for ending close to goal
+const MOVEMENT_BONUS: f32 = 10.0;          // Base reward for moving at all (encourages exploration)
+
+// Efficiency rewards
+const EFFICIENCY_REWARD: f32 = 40.0;       // Reward for direct paths (progress/distance)
+const SPEED_REWARD: f32 = 10.0;            // Reward for making progress quickly
+const ROAD_ADHERENCE_REWARD: f32 = 15.0;   // Reward for staying on road
+
+// Penalties (kept mild to encourage exploration over stagnation)
+const OFF_ROAD_PENALTY_MAX: f32 = 30.0;    // Maximum off-road penalty (capped!)
+const CRASH_PENALTY: f32 = 0.2;            // Multiplicative (keeps 20% of fitness)
+const STAGNANT_PENALTY: f32 = 50.0;        // ADDITIVE penalty for giving up
+const IDLE_PENALTY: f32 = 20.0;            // Hard penalty for not moving
+const SPINNING_PENALTY: f32 = 20.0;        // Penalty for traveling without progress
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Population {
@@ -50,13 +77,19 @@ pub struct Individual {
 pub fn fitness(car: &Car) -> f32 {
     // Hard penalty for not moving at all
     if car.distance_traveled < 5.0 {
-        return -IDLE_PENALTY;
+        // Tiny gradient for any movement (helps early learning)
+        let tiny_credit = car.distance_traveled * 0.5;
+        return -IDLE_PENALTY + tiny_credit;
     }
 
-    let mut f = 0.0;
+    // BASE REWARD: You moved! This ensures trying > not trying
+    let mut f = MOVEMENT_BONUS;
+
+    // ============================================
+    // SECTION 1: PROGRESS REWARDS
+    // ============================================
 
     // Primary: completion ratio (0.0 to 1.0) - normalized by initial distance
-    // This makes fitness comparable across different spawn/destination pairs
     let completion_ratio = if car.initial_distance_to_goal > 0.0 {
         (car.progress_to_goal / car.initial_distance_to_goal).clamp(0.0, 1.0)
     } else {
@@ -64,35 +97,76 @@ pub fn fitness(car: &Car) -> f32 {
     };
     f += completion_ratio * COMPLETION_REWARD;
 
-    // Secondary: efficiency - how direct was the path?
-    // progress / distance_traveled, where 1.0 = perfect straight line
-    let efficiency = if car.distance_traveled > 0.0 {
+    // Bonus for actually reaching the destination
+    if matches!(car.state(), CarState::ReachedDestination) {
+        f += DESTINATION_BONUS;
+    }
+
+    // Final proximity: reward based on WHERE the car ended up
+    if car.initial_distance_to_goal > 0.0 {
+        let final_distance_ratio = (car.distance_to_destination() / car.initial_distance_to_goal).clamp(0.0, 1.0);
+        let proximity = 1.0 - final_distance_ratio;
+        f += proximity * FINAL_PROXIMITY_REWARD;
+    }
+
+    // ============================================
+    // SECTION 2: EFFICIENCY REWARDS
+    // ============================================
+
+    // Path efficiency: how direct was the path?
+    let path_efficiency = if car.distance_traveled > 0.0 {
         (car.progress_to_goal / car.distance_traveled).clamp(0.0, 1.0)
     } else {
         0.0
     };
-    f += efficiency * EFFICIENCY_REWARD;
+    f += path_efficiency * EFFICIENCY_REWARD;
 
-    // SPINNING PENALTY: If car traveled a lot but made little progress, penalize heavily.
-    // This catches cars stuck in turning loops. A car that travels 100 units but only
-    // makes 5 units of progress toward goal is clearly spinning or going in circles.
-    const SPINNING_PENALTY: f32 = 20.0;
-    const MIN_PROGRESS_RATIO: f32 = 0.1; // Expect at least 10% of distance traveled to be progress
-    
-    if car.distance_traveled > 20.0 {
+    // Speed efficiency: reward for making progress quickly
+    if car.progress_to_goal > 10.0 && car.time_spent_alive > 0.0 {
+        let progress_per_time = car.progress_to_goal / car.time_spent_alive;
+        let speed_score = (progress_per_time * 10.0).clamp(0.0, 1.0);
+        f += speed_score * SPEED_REWARD;
+    }
+
+    // Road adherence: reward for staying on the road
+    if car.time_spent_alive > 0.0 {
+        let on_road_ratio = 1.0 - (car.time_spent_off_road / car.time_spent_alive).clamp(0.0, 1.0);
+        f += on_road_ratio * ROAD_ADHERENCE_REWARD;
+    }
+
+    // ============================================
+    // SECTION 3: PENALTIES (capped to prevent catastrophic values)
+    // ============================================
+
+    // Off-road penalty - LINEAR and CAPPED to prevent population collapse
+    if car.time_spent_alive > 0.0 {
+        let off_road_ratio = (car.time_spent_off_road / car.time_spent_alive).clamp(0.0, 1.0);
+        f -= off_road_ratio * OFF_ROAD_PENALTY_MAX;
+    }
+
+    // Spinning penalty: catches cars stuck in turning loops
+    const MIN_PROGRESS_RATIO: f32 = 0.08;
+    if car.distance_traveled > 25.0 {
         let progress_ratio = car.progress_to_goal / car.distance_traveled;
         if progress_ratio < MIN_PROGRESS_RATIO {
-            // Scale penalty by how much they traveled while spinning
-            f -= SPINNING_PENALTY * (1.0 - progress_ratio / MIN_PROGRESS_RATIO);
+            let spin_severity = 1.0 - (progress_ratio / MIN_PROGRESS_RATIO);
+            f -= SPINNING_PENALTY * spin_severity;
         }
     }
 
-    // Penalize being off-road (continuous)
-    f -= car.time_spent_off_road * OFF_ROAD_PENALTY;
+    // ============================================
+    // SECTION 4: TERMINAL STATE PENALTIES
+    // ============================================
 
-    // Crash penalty - multiplicative so it scales with achievement
+    // Crash penalty - multiplicative, keeps some credit for progress made
     if matches!(car.state(), CarState::Crashed) {
         f *= CRASH_PENALTY;
+    }
+
+    // Stagnant penalty - ADDITIVE so stagnant cars are always worse than active ones
+    // This ensures "giving up" is never a winning strategy
+    if matches!(car.state(), CarState::Stagnant) {
+        f -= STAGNANT_PENALTY;
     }
 
     f

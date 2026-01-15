@@ -76,6 +76,7 @@ pub enum CarState {
     UserControlled(Destination),
     AIControlled(Destination),
     ReachedDestination,
+    Stagnant,
     Crashed,
 }
 
@@ -310,6 +311,9 @@ impl Car {
             CarState::ReachedDestination => {
                 self.state = CarState::ReachedDestination;
             }
+            CarState::Stagnant => {
+                self.state = CarState::Stagnant;
+            }
             CarState::Crashed => {
                 self.state = CarState::Crashed;
             }
@@ -497,6 +501,10 @@ impl Car {
                 self.color.a = 0.2;
             }
 
+            CarState::Stagnant => {
+                self.speed = 0.0;
+            }
+
             CarState::Crashed => {
                 self.speed = 0.0;
             }
@@ -504,19 +512,25 @@ impl Car {
 
         // Stagnation detection: mark cars as crashed if they don't move for a while.
         // NOTE: We no longer set remove_flag here to avoid corrupting fitness attribution
-        // during evolution. Instead, stagnant cars transition to Crashed state.
+        // during evolution. Instead, stagnant cars transition to Stagnant state.
         const STAGNANT_MOVEMENT_EPS: f32 = 0.05;
         const STAGNANT_FRAMES: u32 = 300;
 
-        let moved = (self.position - prev_pos).length();
-        if moved < STAGNANT_MOVEMENT_EPS && self.speed.abs() < 0.1 {
-            self.stagnant_steps = self.stagnant_steps.saturating_add(1);
-            if self.stagnant_steps > STAGNANT_FRAMES {
-                // Mark as crashed instead of removing - preserves population alignment
-                self.change_state(CarState::Crashed);
+        let terminal_state = matches!(
+            self.state(),
+            CarState::ReachedDestination | CarState::Crashed | CarState::Stagnant
+        );
+        if !terminal_state {
+            let moved = (self.position - prev_pos).length();
+            if moved < STAGNANT_MOVEMENT_EPS && self.speed.abs() < 0.1 {
+                self.stagnant_steps = self.stagnant_steps.saturating_add(1);
+                if self.stagnant_steps > STAGNANT_FRAMES {
+                    // Mark as stagnant instead of removing - preserves population alignment
+                    self.change_state(CarState::Stagnant);
+                }
+            } else {
+                self.stagnant_steps = 0;
             }
-        } else {
-            self.stagnant_steps = 0;
         }
     }
 
@@ -782,6 +796,9 @@ pub fn draw_car(car: &Car, debug: bool) {
     match car.state() {
         CarState::ReachedDestination => {
             display_color = Color::from_rgba(120, 210, 140, 220);
+        }
+        CarState::Stagnant => {
+            display_color = Color::from_rgba(230, 200, 80, 210);
         }
         CarState::Crashed => {
             display_color = Color::from_rgba(210, 80, 80, 200);
