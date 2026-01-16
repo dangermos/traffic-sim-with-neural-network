@@ -111,6 +111,9 @@ pub struct Car {
     heading_error: f32,
     // Artificial Neural Network Fields
     pub network: Network,
+    /// Scratch buffers for zero-allocation neural network propagation
+    nn_buf_a: Vec<f32>,
+    nn_buf_b: Vec<f32>,
 
     // Genome Fields
     pub time_spent_alive: f32,
@@ -139,6 +142,8 @@ impl Default for Car {
             goal_align: 0.0,
             heading_error: 0.0,
             network: Network::new(&vec![]),
+            nn_buf_a: Vec::new(),
+            nn_buf_b: Vec::new(),
             obstruction_rays: Vec::new(),
             time_spent_alive: 0.0,
             time_spent_off_road: 0.0,
@@ -269,6 +274,9 @@ impl Car {
         // Use manhattan distance to match how progress_to_goal is accumulated.
         let initial_distance_to_goal = manhattan_distance(&position, &rand_dest);
 
+        // Pre-allocate NN buffers based on network size
+        let buf_size = network.max_layer_size();
+
         Self {
             position,
             rotation,
@@ -276,6 +284,8 @@ impl Car {
             road_id,
             state,
             color,
+            nn_buf_a: Vec::with_capacity(buf_size),
+            nn_buf_b: Vec::with_capacity(buf_size),
             network,
             destination,
             initial_distance_to_goal,
@@ -438,7 +448,7 @@ impl Car {
                 let dt = 0.01;
 
                 // If we're very close to our destination, register arrival and transition.
-                let eps: f32 = 10.0;
+                let eps: f32 = 15.0; // Increased from 10.0 for easier arrival
                 if self.distance_to_destination < eps {
                     // Arrived at Destination
                     self.position = destination.position;
@@ -446,8 +456,13 @@ impl Car {
                     self.change_state(CarState::ReachedDestination);
                 } else {
                     const MAX_SPEED: f32 = 80.0;
-                    const MAX_ANGULAR_VELOCITY: f32 = 3.0; // In radians
+                    const MAX_ANGULAR_VELOCITY: f32 = 2.5;
                     const ACCELERATION: f32 = 120.0;
+                    const MIN_SPEED_FOR_STEERING: f32 = 5.0;
+
+                    // Proximity assist kicks in when close to goal
+                    const ASSIST_RANGE: f32 = 150.0; // Start assisting within this distance
+                    const MAX_ASSIST_STRENGTH: f32 = 0.4; // Max blend toward direct steering
 
                     let inputs = [
                         self.obstruction_score, // 0 -> 1
@@ -457,19 +472,43 @@ impl Car {
                         self.speed / MAX_SPEED, // 0 -> 1
                     ];
 
-                    let result = self.network.propagate(inputs.to_vec());
+                    let result = self.network.propagate_into(
+                        &inputs,
+                        &mut self.nn_buf_a,
+                        &mut self.nn_buf_b,
+                    );
 
                     let throttle = result[0].clamp(-1.0, 1.0);
-                    let steering = result[1].clamp(-1.0, 1.0);
+                    let nn_steering = result[1].clamp(-1.0, 1.0);
 
                     assert!(
                         result.len() == 2,
                         "The network has more than 2 outputs, no good!"
                     );
 
+                    // Calculate direct-to-goal steering (what steering SHOULD be to face goal)
+                    let to_goal = destination.position - self.position;
+                    let goal_angle = to_goal.y.atan2(to_goal.x);
+                    let angle_diff = (goal_angle - self.rotation).sin(); // sin gives signed error
+
+                    // Proximity factor: 0 when far, approaches 1 when very close
+                    let proximity =
+                        (1.0 - self.distance_to_destination / ASSIST_RANGE).clamp(0.0, 1.0);
+                    let assist_strength = proximity * MAX_ASSIST_STRENGTH;
+
+                    // Blend neural network steering with direct-to-goal steering
+                    let steering =
+                        nn_steering * (1.0 - assist_strength) + angle_diff * assist_strength;
+                    let steering = steering.clamp(-1.0, 1.0);
+
                     // Apply physics
                     self.speed = (self.speed + throttle * ACCELERATION * dt).clamp(0.0, MAX_SPEED);
-                    self.rotation += steering * MAX_ANGULAR_VELOCITY * dt;
+
+                    // Steering effectiveness scales with speed - can't turn well at low speeds
+                    // This prevents cars from spinning in place
+                    let speed_factor = (self.speed / MIN_SPEED_FOR_STEERING).clamp(0.0, 1.0);
+                    self.rotation += steering * MAX_ANGULAR_VELOCITY * speed_factor * dt;
+
                     self.distance_traveled += self.speed * dt;
                     self.move_car(debug);
 
@@ -653,8 +692,18 @@ impl Car {
 
         let road_points = &road_grid[self.road_id].points;
 
-        let tangent = road_tangent_at_pos(self.position, &road_points);
+        let mut tangent = road_tangent_at_pos(self.position, &road_points);
 
+        // Ensure tangent points toward destination, not away from it
+        // This gives the neural network a consistent signal
+        if let Some(dest) = &self.destination {
+            let to_goal = dest.position - self.position;
+            if tangent.dot(to_goal) < 0.0 {
+                tangent = -tangent; // Flip tangent to point toward goal
+            }
+        }
+
+        // perp_dot gives signed angle: positive = need to turn left, negative = turn right
         vec_direction.perp_dot(tangent).clamp(-1.0, 1.0)
     }
 

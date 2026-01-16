@@ -15,16 +15,117 @@ use traffic::{
     simulation::Simulation,
 };
 
+/// Neural network topology configuration.
+///
+/// The topology defines the structure of the neural network:
+/// - First element is the input layer (must match number of sensor inputs)
+/// - Last element is the output layer (must match number of control outputs)
+/// - Middle elements are hidden layers
+///
+/// Example: `[5, 8, 2]` means 5 inputs, 8 hidden neurons, 2 outputs
+/// Example: `[5, 12, 8, 2]` means 5 inputs, two hidden layers (12 and 8), 2 outputs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkTopology {
+    /// Layer sizes from input to output
+    pub layers: Vec<usize>,
+}
+
+impl Default for NetworkTopology {
+    fn default() -> Self {
+        // Default: 5 inputs, 8 hidden, 2 outputs
+        Self {
+            layers: vec![5, 8, 2],
+        }
+    }
+}
+
+impl NetworkTopology {
+    /// Create a new topology from layer sizes
+    pub fn new(layers: Vec<usize>) -> Self {
+        assert!(layers.len() >= 2, "Need at least input and output layers");
+        assert!(layers[0] > 0, "Input layer must have at least 1 neuron");
+        assert!(
+            layers.last().unwrap() > &0,
+            "Output layer must have at least 1 neuron"
+        );
+        Self { layers }
+    }
+
+    /// Create topology from a string like "5,8,2" or "5,12,8,2"
+    pub fn from_str(s: &str) -> Option<Self> {
+        let layers: Result<Vec<usize>, _> =
+            s.split(',').map(|x| x.trim().parse::<usize>()).collect();
+
+        match layers {
+            Ok(layers) if layers.len() >= 2 && layers.iter().all(|&x| x > 0) => {
+                Some(Self { layers })
+            }
+            _ => None,
+        }
+    }
+
+    /// Get the number of inputs
+    pub fn inputs(&self) -> usize {
+        self.layers[0]
+    }
+
+    /// Get the number of outputs
+    pub fn outputs(&self) -> usize {
+        *self.layers.last().unwrap()
+    }
+
+    /// Get hidden layer sizes (everything except first and last)
+    pub fn hidden_layers(&self) -> &[usize] {
+        if self.layers.len() > 2 {
+            &self.layers[1..self.layers.len() - 1]
+        } else {
+            &[]
+        }
+    }
+
+    /// Convert to LayerTopology vector for neural network creation
+    pub fn to_layer_topologies(&self) -> Vec<LayerTopology> {
+        self.layers
+            .iter()
+            .map(|&neurons| LayerTopology { neurons })
+            .collect()
+    }
+
+    /// Calculate the number of genes (weights + biases) needed for this topology
+    pub fn gene_count(&self) -> usize {
+        let mut count = 0;
+        for i in 0..self.layers.len() - 1 {
+            let inputs = self.layers[i];
+            let outputs = self.layers[i + 1];
+            // Each neuron in the next layer has: inputs weights + 1 bias
+            count += outputs * (inputs + 1);
+        }
+        count
+    }
+
+    /// Create a string representation like "5,8,2"
+    pub fn to_config_string(&self) -> String {
+        self.layers
+            .iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// Display format for logging
+    pub fn display(&self) -> String {
+        let parts: Vec<String> = self.layers.iter().map(|x| x.to_string()).collect();
+        format!("[{}] ({} genes)", parts.join(" → "), self.gene_count())
+    }
+}
+
 // Helper trait to access distance_to_destination from Car
-// (if not already public, we compute it from available data)
 trait CarFitnessExt {
     fn distance_to_destination(&self) -> f32;
 }
 
 impl CarFitnessExt for Car {
     fn distance_to_destination(&self) -> f32 {
-        // Use the car's tracked progress to estimate current distance
-        // current_distance ≈ initial_distance - progress_made
         (self.initial_distance_to_goal - self.progress_to_goal).max(0.0)
     }
 }
@@ -44,23 +145,32 @@ The loop for neuroevolution is
 */
 
 // === FITNESS WEIGHTS ===
-// Primary rewards
-const COMPLETION_REWARD: f32 = 100.0;      // Reward for % of journey completed
-const DESTINATION_BONUS: f32 = 75.0;       // Bonus for actually reaching destination
-const FINAL_PROXIMITY_REWARD: f32 = 30.0;  // Reward for ending close to goal
-const MOVEMENT_BONUS: f32 = 10.0;          // Base reward for moving at all (encourages exploration)
+// This fitness function has a HIGH SKILL CEILING:
+// - Simply reaching the goal gives moderate reward
+// - Reaching FAST gives massive bonus (up to 150 extra points)
+// - This creates selection pressure even after cars learn to complete
 
-// Efficiency rewards
-const EFFICIENCY_REWARD: f32 = 40.0;       // Reward for direct paths (progress/distance)
-const SPEED_REWARD: f32 = 10.0;            // Reward for making progress quickly
-const ROAD_ADHERENCE_REWARD: f32 = 15.0;   // Reward for staying on road
+// Base rewards (low - just for being active)
+const BASE_MOVEMENT_REWARD: f32 = 5.0;
 
-// Penalties (kept mild to encourage exploration over stagnation)
-const OFF_ROAD_PENALTY_MAX: f32 = 30.0;    // Maximum off-road penalty (capped!)
-const CRASH_PENALTY: f32 = 0.2;            // Multiplicative (keeps 20% of fitness)
-const STAGNANT_PENALTY: f32 = 50.0;        // ADDITIVE penalty for giving up
-const IDLE_PENALTY: f32 = 20.0;            // Hard penalty for not moving
-const SPINNING_PENALTY: f32 = 20.0;        // Penalty for traveling without progress
+// Goal completion rewards
+const DESTINATION_BONUS: f32 = 100.0; // Base bonus for reaching goal
+const SPEED_BONUS_MAX: f32 = 150.0; // ADDITIONAL bonus for reaching fast
+const PROXIMITY_REWARD_MAX: f32 = 50.0; // Reward for ending close to goal
+
+// Road-following rewards (foundation for learning)
+const ROAD_ADHERENCE_REWARD: f32 = 30.0; // Staying on road
+const ACTIVE_DRIVING_REWARD: f32 = 20.0; // Moving while on road
+
+// Penalties
+const OFF_ROAD_PENALTY: f32 = 50.0; // Going off road
+const CRASH_PENALTY_MULT: f32 = 0.2; // Multiplicative - keeps only 20%
+const STAGNANT_PENALTY: f32 = 40.0; // Giving up / stopping
+const IDLE_PENALTY: f32 = 20.0; // Not moving at all
+
+// Reference time for speed bonus calculation
+// With max_frames=3000, expect good runs to complete around 1500 frames
+const EXPECTED_COMPLETION_TIME: f32 = 1500.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Population {
@@ -74,97 +184,103 @@ pub struct Individual {
     pub fitness: f32,
 }
 
+/// Fitness function with HIGH SKILL CEILING
+///
+/// Fitness ranges:
+/// - Crash/Stagnant: -40 to +20
+/// - Active but doesn't reach goal: +20 to +100
+/// - Reaches goal slowly (1000 frames): ~175
+/// - Reaches goal at expected time (500 frames): ~250
+/// - Reaches goal FAST (250 frames): ~325
+///
+/// This ensures there's always room to improve even after learning to complete!
 pub fn fitness(car: &Car) -> f32 {
-    // Hard penalty for not moving at all
+    // ============================================
+    // IMMEDIATE FAILURES
+    // ============================================
+
     if car.distance_traveled < 5.0 {
-        // Tiny gradient for any movement (helps early learning)
-        let tiny_credit = car.distance_traveled * 0.5;
-        return -IDLE_PENALTY + tiny_credit;
+        return -IDLE_PENALTY + car.distance_traveled * 0.5;
     }
 
-    // BASE REWARD: You moved! This ensures trying > not trying
-    let mut f = MOVEMENT_BONUS;
+    let mut f = BASE_MOVEMENT_REWARD;
 
     // ============================================
-    // SECTION 1: PROGRESS REWARDS
+    // ROAD-FOLLOWING REWARDS (foundation)
     // ============================================
 
-    // Primary: completion ratio (0.0 to 1.0) - normalized by initial distance
-    let completion_ratio = if car.initial_distance_to_goal > 0.0 {
-        (car.progress_to_goal / car.initial_distance_to_goal).clamp(0.0, 1.0)
+    let on_road_ratio = if car.time_spent_alive > 0.0 {
+        1.0 - (car.time_spent_off_road / car.time_spent_alive).clamp(0.0, 1.0)
     } else {
         0.0
     };
-    f += completion_ratio * COMPLETION_REWARD;
 
-    // Bonus for actually reaching the destination
-    if matches!(car.state(), CarState::ReachedDestination) {
+    // Road adherence
+    f += on_road_ratio * ROAD_ADHERENCE_REWARD;
+
+    // Active driving: reward distance traveled while on road
+    let distance_score = (car.distance_traveled / 1000.0).clamp(0.0, 1.0);
+    f += distance_score * on_road_ratio * ACTIVE_DRIVING_REWARD;
+
+    // ============================================
+    // GOAL COMPLETION REWARDS (main objective)
+    // This is where the skill ceiling comes from!
+    // ============================================
+
+    let reached_goal = matches!(car.state(), CarState::ReachedDestination);
+
+    if reached_goal {
+        // BASE: You reached the goal!
         f += DESTINATION_BONUS;
-    }
 
-    // Final proximity: reward based on WHERE the car ended up
-    if car.initial_distance_to_goal > 0.0 {
-        let final_distance_ratio = (car.distance_to_destination() / car.initial_distance_to_goal).clamp(0.0, 1.0);
-        let proximity = 1.0 - final_distance_ratio;
-        f += proximity * FINAL_PROXIMITY_REWARD;
-    }
+        // SPEED BONUS: The faster you reach, the more points!
+        // This creates MASSIVE differentiation between slow and fast completions.
+        //
+        // At EXPECTED_COMPLETION_TIME (500 frames): ~75 bonus points
+        // At half that time (250 frames): ~150 bonus points (maximum)
+        // At double that time (1000 frames): ~37 bonus points
+        let completion_time = car.time_spent_alive.max(1.0);
+        let speed_factor = (EXPECTED_COMPLETION_TIME / completion_time).clamp(0.0, 2.0);
+        let speed_bonus = speed_factor * SPEED_BONUS_MAX * 0.5;
+        f += speed_bonus;
 
-    // ============================================
-    // SECTION 2: EFFICIENCY REWARDS
-    // ============================================
-
-    // Path efficiency: how direct was the path?
-    let path_efficiency = if car.distance_traveled > 0.0 {
-        (car.progress_to_goal / car.distance_traveled).clamp(0.0, 1.0)
+        // EFFICIENCY BONUS: Did you take a relatively direct path?
+        if car.distance_traveled > 0.0 && car.initial_distance_to_goal > 0.0 {
+            let path_ratio = car.initial_distance_to_goal / car.distance_traveled;
+            let efficiency_bonus = path_ratio.clamp(0.0, 0.5) * 40.0;
+            f += efficiency_bonus;
+        }
     } else {
-        0.0
-    };
-    f += path_efficiency * EFFICIENCY_REWARD;
+        // Didn't reach goal - reward based on how close you got
+        if car.initial_distance_to_goal > 0.0 {
+            let final_distance = car.distance_to_destination();
+            let proximity_ratio =
+                1.0 - (final_distance / car.initial_distance_to_goal).clamp(0.0, 1.0);
 
-    // Speed efficiency: reward for making progress quickly
-    if car.progress_to_goal > 10.0 && car.time_spent_alive > 0.0 {
-        let progress_per_time = car.progress_to_goal / car.time_spent_alive;
-        let speed_score = (progress_per_time * 10.0).clamp(0.0, 1.0);
-        f += speed_score * SPEED_REWARD;
-    }
-
-    // Road adherence: reward for staying on the road
-    if car.time_spent_alive > 0.0 {
-        let on_road_ratio = 1.0 - (car.time_spent_off_road / car.time_spent_alive).clamp(0.0, 1.0);
-        f += on_road_ratio * ROAD_ADHERENCE_REWARD;
-    }
-
-    // ============================================
-    // SECTION 3: PENALTIES (capped to prevent catastrophic values)
-    // ============================================
-
-    // Off-road penalty - LINEAR and CAPPED to prevent population collapse
-    if car.time_spent_alive > 0.0 {
-        let off_road_ratio = (car.time_spent_off_road / car.time_spent_alive).clamp(0.0, 1.0);
-        f -= off_road_ratio * OFF_ROAD_PENALTY_MAX;
-    }
-
-    // Spinning penalty: catches cars stuck in turning loops
-    const MIN_PROGRESS_RATIO: f32 = 0.08;
-    if car.distance_traveled > 25.0 {
-        let progress_ratio = car.progress_to_goal / car.distance_traveled;
-        if progress_ratio < MIN_PROGRESS_RATIO {
-            let spin_severity = 1.0 - (progress_ratio / MIN_PROGRESS_RATIO);
-            f -= SPINNING_PENALTY * spin_severity;
+            // Quadratic scaling: getting VERY close matters more
+            let proximity_score = proximity_ratio * proximity_ratio;
+            f += proximity_score * PROXIMITY_REWARD_MAX;
         }
     }
 
     // ============================================
-    // SECTION 4: TERMINAL STATE PENALTIES
+    // PENALTIES
     // ============================================
 
-    // Crash penalty - multiplicative, keeps some credit for progress made
-    if matches!(car.state(), CarState::Crashed) {
-        f *= CRASH_PENALTY;
+    // Off-road penalty
+    if car.time_spent_alive > 0.0 {
+        let off_road_ratio = (car.time_spent_off_road / car.time_spent_alive).clamp(0.0, 1.0);
+        f -= off_road_ratio * OFF_ROAD_PENALTY;
     }
 
-    // Stagnant penalty - ADDITIVE so stagnant cars are always worse than active ones
-    // This ensures "giving up" is never a winning strategy
+    // ============================================
+    // TERMINAL STATE PENALTIES
+    // ============================================
+
+    if matches!(car.state(), CarState::Crashed) {
+        f *= CRASH_PENALTY_MULT;
+    }
+
     if matches!(car.state(), CarState::Stagnant) {
         f -= STAGNANT_PENALTY;
     }
@@ -182,10 +298,11 @@ pub fn mutate<R: Rng>(genes: &mut [f32], mutation_rate: f32, mutation_strength: 
 }
 
 pub fn evolve_generation<R: Rng>(
-    population: &Population, // Initial Population
-    elitism: usize,          // N top individuals to keep
+    population: &Population,
+    elitism: usize,
     mutation_rate: f32,
     mutation_strength: f32,
+    tournament_size: usize,
     rng: &mut R,
 ) -> Population {
     let mut sorted = population.individuals.clone();
@@ -198,15 +315,13 @@ pub fn evolve_generation<R: Rng>(
 
     let rest = sorted.len().saturating_sub(n);
 
-    // Seed per-child RNGs deterministically from the passed-in RNG so runs remain reproducible.
     let seeds: Vec<u64> = (0..rest).map(|_| rng.random()).collect();
 
     let children: Vec<Individual> = seeds
         .into_par_iter()
         .map(|seed| {
-            // SmallRng is faster to initialize per task than StdRng.
             let mut local_rng = SmallRng::seed_from_u64(seed);
-            let parent = tournament_select(&sorted, 3, &mut local_rng);
+            let parent = tournament_select(&sorted, tournament_size, &mut local_rng);
             let mut child_genes = parent.genes.clone();
             mutate(
                 &mut child_genes,
@@ -229,11 +344,6 @@ pub fn evolve_generation<R: Rng>(
         generation,
     }
 }
-
-/*pub fn crossover<R: Rng>(parent_a: &[f32], parent_b: &[f32], rng: &mut R) -> Vec<f32> {
-    //TODO implement Crossover (if needed)
-    todo!()
-}*/
 
 pub fn tournament_select<'from_population, R: Rng>(
     population: &'from_population [Individual],
@@ -278,51 +388,38 @@ pub fn make_sim_from_slice<R: Rng>(
     road_grid: &RoadGrid,
     rng: &mut R,
 ) -> Simulation {
+    make_sim_from_slice_with_topology(individuals, road_grid, &NetworkTopology::default(), rng)
+}
+
+/// Create simulation with explicit network topology
+pub fn make_sim_from_slice_with_topology<R: Rng>(
+    individuals: &[Individual],
+    road_grid: &RoadGrid,
+    topology: &NetworkTopology,
+    rng: &mut R,
+) -> Simulation {
     let road_count = road_grid.roads.len().max(1);
+    let layer_topologies = topology.to_layer_topologies();
+    let expected_genes = topology.gene_count();
 
     let cars = CarWorld::new(
         individuals
             .iter()
             .enumerate()
             .map(|(i, indiv)| {
-                const INPUTS: usize = 5;
-                const OUTPUTS: usize = 2;
-
-                // Infer a reasonable topology from the genes while matching the car's
-                // expected input/output sizes.
-                let topology: Vec<LayerTopology> = {
-                    let direct_count = OUTPUTS * (INPUTS + 1);
-                    if indiv.genes.len() == direct_count {
-                        vec![
-                            LayerTopology { neurons: INPUTS },
-                            LayerTopology { neurons: OUTPUTS },
-                        ]
-                    } else {
-                        const MAX_HIDDEN: usize = 64;
-                        let mut matched = None;
-                        for hidden in 1..=MAX_HIDDEN {
-                            let needed = hidden * (INPUTS + 1) + OUTPUTS * (hidden + 1);
-                            if needed == indiv.genes.len() {
-                                matched = Some(hidden);
-                                break;
-                            }
-                        }
-
-                        let hidden = matched.unwrap_or_else(|| {
-                            let denom = INPUTS + OUTPUTS + 1; // 8
-                            ((indiv.genes.len().saturating_sub(OUTPUTS)) / denom)
-                                .clamp(1, MAX_HIDDEN)
-                        });
-
-                        vec![
-                            LayerTopology { neurons: INPUTS },
-                            LayerTopology { neurons: hidden },
-                            LayerTopology { neurons: OUTPUTS },
-                        ]
-                    }
+                // Use provided topology, but handle gene count mismatch gracefully
+                let final_topology = if indiv.genes.len() == expected_genes {
+                    layer_topologies.clone()
+                } else {
+                    // Try to infer topology from gene count (backwards compatibility)
+                    infer_topology_from_genes(
+                        indiv.genes.len(),
+                        topology.inputs(),
+                        topology.outputs(),
+                    )
                 };
 
-                let network = Network::from_genes(&topology, &indiv.genes);
+                let network = Network::from_genes(&final_topology, &indiv.genes);
 
                 let (r, g, b, _a): (u8, u8, u8, u8) = rng.random();
                 let color = Color::from_rgba(r, g, b, 255);
@@ -336,6 +433,86 @@ pub fn make_sim_from_slice<R: Rng>(
     );
 
     Simulation::new(cars, road_grid.clone())
+}
+
+/// Infer network topology from gene count (for backwards compatibility with checkpoints)
+fn infer_topology_from_genes(
+    gene_count: usize,
+    inputs: usize,
+    outputs: usize,
+) -> Vec<LayerTopology> {
+    // Check if it's a direct connection (no hidden layer)
+    let direct_count = outputs * (inputs + 1);
+    if gene_count == direct_count {
+        return vec![
+            LayerTopology { neurons: inputs },
+            LayerTopology { neurons: outputs },
+        ];
+    }
+
+    // Try to find a single hidden layer size that matches
+    const MAX_HIDDEN: usize = 64;
+    for hidden in 1..=MAX_HIDDEN {
+        let needed = hidden * (inputs + 1) + outputs * (hidden + 1);
+        if needed == gene_count {
+            return vec![
+                LayerTopology { neurons: inputs },
+                LayerTopology { neurons: hidden },
+                LayerTopology { neurons: outputs },
+            ];
+        }
+    }
+
+    // Try two hidden layers
+    for h1 in 1..=MAX_HIDDEN {
+        for h2 in 1..=MAX_HIDDEN {
+            let needed = h1 * (inputs + 1) + h2 * (h1 + 1) + outputs * (h2 + 1);
+            if needed == gene_count {
+                return vec![
+                    LayerTopology { neurons: inputs },
+                    LayerTopology { neurons: h1 },
+                    LayerTopology { neurons: h2 },
+                    LayerTopology { neurons: outputs },
+                ];
+            }
+        }
+    }
+
+    // Fallback: estimate single hidden layer
+    let denom = inputs + outputs + 1;
+    let hidden = ((gene_count.saturating_sub(outputs)) / denom).clamp(1, MAX_HIDDEN);
+
+    vec![
+        LayerTopology { neurons: inputs },
+        LayerTopology { neurons: hidden },
+        LayerTopology { neurons: outputs },
+    ]
+}
+
+/// Create a new random population with the given topology
+pub fn create_random_population<R: Rng>(
+    size: usize,
+    topology: &NetworkTopology,
+    rng: &mut R,
+) -> Population {
+    let gene_count = topology.gene_count();
+
+    let individuals = (0..size)
+        .map(|_| {
+            let genes: Vec<f32> = (0..gene_count)
+                .map(|_| rng.random_range(-1.0..1.0))
+                .collect();
+            Individual {
+                genes,
+                fitness: 0.0,
+            }
+        })
+        .collect();
+
+    Population {
+        individuals,
+        generation: 0,
+    }
 }
 
 pub fn load_best_history(path: &PathBuf) -> Vec<f32> {

@@ -1,9 +1,171 @@
 use ::rand::SeedableRng;
 use bincode::deserialize;
-use genetics::Individual;
+use genetics::{Individual, NetworkTopology, make_sim_from_slice_with_topology};
 use macroquad::prelude::*;
 use rand_chacha::ChaCha8Rng;
+use std::env;
 use traffic::levels::*;
+use traffic::simulation::Simulation;
+
+/// Available training levels/maps
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrainingLevel {
+    // Easy levels
+    StraightLine, // Simple straight road
+    StraightRoad, // L-shaped road
+    Level1,       // Basic crossroads
+    Level2,       // Rectangle with diagonals
+    Level3,       // Grid pattern
+
+    // Medium levels
+    TestSensors, // Random grid for testing
+    Overnight,   // Standard city grid (default)
+
+    // Hard levels
+    Nightmare,        // Twisty track with curves
+    NightmareExtreme, // Brutal track with tight spirals
+}
+
+impl TrainingLevel {
+    fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            // Easy
+            "straight" | "straight_line" | "line" => Some(Self::StraightLine),
+            "straight_road" | "lshape" | "l" => Some(Self::StraightRoad),
+            "level1" | "1" | "basic" => Some(Self::Level1),
+            "level2" | "2" | "rectangle" => Some(Self::Level2),
+            "level3" | "3" => Some(Self::Level3),
+
+            // Medium
+            "test" | "test_sensors" | "sensors" | "random" => Some(Self::TestSensors),
+            "overnight" | "city" | "grid" => Some(Self::Overnight),
+
+            // Hard
+            "nightmare" | "hard" | "twisty" => Some(Self::Nightmare),
+            "nightmare_extreme" | "extreme" | "insane" | "brutal" => Some(Self::NightmareExtreme),
+
+            _ => None,
+        }
+    }
+
+    fn build_simulation<R: ::rand::Rng>(self, rng: &mut R) -> Simulation {
+        let center = vec2(960.0, 540.0);
+        let screen = vec2(1920.0, 1080.0);
+
+        match self {
+            Self::StraightLine => build_straight_line_level(center, 800.0, rng),
+            Self::StraightRoad => build_straight_road_4(center, screen, rng),
+            Self::Level1 => build_level_1(center, screen, rng),
+            Self::Level2 => build_level_2(center, screen, rng),
+            Self::Level3 => build_level_3(center, screen, rng),
+            Self::TestSensors => test_sensors(center, screen, rng),
+            Self::Overnight => overnight_training(rng),
+            Self::Nightmare => nightmare_track(rng),
+            Self::NightmareExtreme => nightmare_track_extreme(rng),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::StraightLine => "straight_line (easy)",
+            Self::StraightRoad => "straight_road (L-shape)",
+            Self::Level1 => "level1 (basic crossroads)",
+            Self::Level2 => "level2 (rectangle)",
+            Self::Level3 => "level3 (grid)",
+            Self::TestSensors => "test_sensors (random)",
+            Self::Overnight => "overnight (city grid)",
+            Self::Nightmare => "nightmare (twisty)",
+            Self::NightmareExtreme => "nightmare_extreme (brutal)",
+        }
+    }
+
+    fn list_all() -> &'static str {
+        "Available levels:\n\
+         Easy:   straight_line, straight_road, level1, level2, level3\n\
+         Medium: test_sensors, overnight\n\
+         Hard:   nightmare, nightmare_extreme"
+    }
+}
+
+fn parse_level_from_args() -> TrainingLevel {
+    let args: Vec<String> = env::args().collect();
+
+    // Look for --level or -l argument
+    for i in 0..args.len() {
+        if (args[i] == "--level" || args[i] == "-l") && i + 1 < args.len() {
+            if let Some(level) = TrainingLevel::from_str(&args[i + 1]) {
+                return level;
+            } else {
+                eprintln!(
+                    "Unknown level '{}'.\n{}",
+                    args[i + 1],
+                    TrainingLevel::list_all()
+                );
+            }
+        }
+        // Also support --level=value format
+        if args[i].starts_with("--level=") {
+            let value = &args[i][8..];
+            if let Some(level) = TrainingLevel::from_str(value) {
+                return level;
+            }
+        }
+    }
+
+    // Check .config file for level setting
+    if let Ok(contents) = std::fs::read_to_string(".config") {
+        for line in contents.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if let Some(value) = line
+                .strip_prefix("level=")
+                .or_else(|| line.strip_prefix("map="))
+                .or_else(|| line.strip_prefix("track="))
+            {
+                if let Some(level) = TrainingLevel::from_str(value.trim()) {
+                    return level;
+                }
+            }
+        }
+    }
+
+    TrainingLevel::Overnight
+}
+
+fn parse_topology_from_config() -> NetworkTopology {
+    // Check command line args first
+    let args: Vec<String> = env::args().collect();
+    for i in 0..args.len() {
+        if (args[i] == "--topology" || args[i] == "-t") && i + 1 < args.len() {
+            if let Some(topo) = NetworkTopology::from_str(&args[i + 1]) {
+                return topo;
+            }
+        }
+        if args[i].starts_with("--topology=") {
+            let value = &args[i][11..];
+            if let Some(topo) = NetworkTopology::from_str(value) {
+                return topo;
+            }
+        }
+    }
+
+    // Check .config file
+    if let Ok(contents) = std::fs::read_to_string(".config") {
+        for line in contents.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if let Some(value) = line
+                .strip_prefix("topology=")
+                .or_else(|| line.strip_prefix("network="))
+                .or_else(|| line.strip_prefix("layers="))
+            {
+                if let Some(topo) = NetworkTopology::from_str(value.trim()) {
+                    return topo;
+                }
+            }
+        }
+    }
+
+    NetworkTopology::default()
+}
 
 const BASE_ZOOM: f32 = 0.003;
 const MIN_ZOOM: f32 = 0.0001;
@@ -61,7 +223,11 @@ impl CameraController {
     fn handle_input(&mut self) {
         let dt = get_frame_time().min(0.1);
 
-        let base_speed = if is_key_down(KeyCode::LeftShift) { 150.0 } else { 80.0 };
+        let base_speed = if is_key_down(KeyCode::LeftShift) {
+            150.0
+        } else {
+            80.0
+        };
         let pan_step = base_speed * dt;
 
         let mut manual_pan = false;
@@ -204,7 +370,6 @@ fn draw_camera_hud(controller: &CameraController) {
     );
 }
 
-
 fn window_conf() -> Conf {
     Conf {
         window_title: "Traffic Simulation".to_owned(),
@@ -224,39 +389,68 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
+    let level = parse_level_from_args();
+    let topology = parse_topology_from_config();
+    println!("Using level: {}", level.name());
+    println!("Using network topology: {}", topology.display());
+
     let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-    let mut sim = overnight_training(&mut rng);
+    // Create initial simulation to get road grid and expected population size
+    let initial_sim = level.build_simulation(&mut rng);
+    let road_grid = initial_sim.roads.clone();
+    let expected_pop_size = initial_sim.cars.cars.len();
+    let expected_gene_count = topology.gene_count();
 
-    let initial_individuals: Vec<Individual> = sim
-        .cars
-        .cars
-        .iter()
-        .map(|car| {
-            let genes = car.network.to_genes();
-            let fitness = genetics::fitness(car);
-            Individual { genes, fitness }
-        })
-        .collect();
+    // Create fresh random individuals with configured topology
+    let fresh_population =
+        genetics::create_random_population(expected_pop_size, &topology, &mut rng);
+    let initial_individuals = fresh_population.individuals;
 
-    let expected_pop_size = initial_individuals.len();
     let checkpoint_path = "output/serialization/individuals.bin";
 
-    let _individuals = if std::path::Path::new(checkpoint_path).exists() {
+    // Load checkpoint or use initial individuals
+    let individuals = if std::path::Path::new(checkpoint_path).exists() {
         let data = std::fs::read(checkpoint_path).expect("Failed to read checkpoint file");
-        let individuals: Vec<Individual> =
+        let loaded: Vec<Individual> =
             deserialize(&data).expect("Failed to deserialize individuals");
-        if individuals.len() != expected_pop_size {
+
+        // Validate both size and gene count
+        let size_ok = loaded.len() == expected_pop_size;
+        let genes_ok = loaded
+            .first()
+            .map(|i| i.genes.len() == expected_gene_count)
+            .unwrap_or(false);
+
+        if !size_ok {
             eprintln!(
-                "Checkpoint population size {} does not match expected size {}",
-                individuals.len(),
+                "Checkpoint population size {} != expected {}; using fresh population",
+                loaded.len(),
                 expected_pop_size
             );
+            initial_individuals
+        } else if !genes_ok {
+            eprintln!(
+                "Checkpoint gene count {} != expected {} for topology {}; using fresh population",
+                loaded.first().map(|i| i.genes.len()).unwrap_or(0),
+                expected_gene_count,
+                topology.to_config_string()
+            );
+            initial_individuals
+        } else {
+            println!(
+                "Loaded {} trained individuals from checkpoint",
+                loaded.len()
+            );
+            loaded
         }
-        individuals
     } else {
+        println!("No checkpoint found, using fresh random individuals");
         initial_individuals
     };
+
+    // Create simulation from loaded individuals with configured topology
+    let mut sim = make_sim_from_slice_with_topology(&individuals, &road_grid, &topology, &mut rng);
 
     let initial_pos = sim
         .cars

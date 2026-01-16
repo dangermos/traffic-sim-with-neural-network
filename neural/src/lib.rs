@@ -1,7 +1,7 @@
 use rand::Rng;
 use std::fmt;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct LayerTopology {
     pub neurons: usize,
 }
@@ -82,6 +82,39 @@ impl Network {
             .iter()
             .fold(inputs, |inputs, layer| layer.propagate(inputs))
     }
+
+    /// Zero-allocation propagation using pre-allocated buffers.
+    /// Returns a slice into whichever buffer holds the final output.
+    pub fn propagate_into<'a>(
+        &self,
+        input: &[f32],
+        buf_a: &'a mut Vec<f32>,
+        buf_b: &'a mut Vec<f32>,
+    ) -> &'a [f32] {
+        buf_a.clear();
+        buf_a.extend_from_slice(input);
+
+        let mut src = buf_a as &mut Vec<f32>;
+        let mut dst = buf_b as &mut Vec<f32>;
+
+        for layer in &self.layers {
+            dst.clear();
+            layer.propagate_into(src, dst);
+            std::mem::swap(&mut src, &mut dst);
+        }
+
+        // After the loop, src points to the buffer with the final result
+        src
+    }
+
+    /// Returns the max layer size (useful for pre-allocating buffers)
+    pub fn max_layer_size(&self) -> usize {
+        self.layers
+            .iter()
+            .map(|l| l.neurons.len())
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 impl Clone for Network {
@@ -121,6 +154,14 @@ impl Layer {
             .map(|x| x.propagate(&inputs, self.activation_function))
             .collect()
     }
+
+    fn propagate_into(&self, inputs: &[f32], out: &mut Vec<f32>) {
+        out.extend(
+            self.neurons
+                .iter()
+                .map(|n| n.propagate_slice(inputs, self.activation_function)),
+        );
+    }
 }
 #[derive(Debug, Clone)]
 /// Neuron of a Neural Network.
@@ -133,7 +174,11 @@ pub struct Neuron {
 
 impl Neuron {
     fn propagate(&self, inputs: &Vec<f32>, activation_function: Activation) -> f32 {
-        assert_eq!(inputs.len(), self.weights.len());
+        self.propagate_slice(inputs.as_slice(), activation_function)
+    }
+
+    fn propagate_slice(&self, inputs: &[f32], activation_function: Activation) -> f32 {
+        debug_assert_eq!(inputs.len(), self.weights.len());
 
         let output = inputs
             .iter()
@@ -141,7 +186,7 @@ impl Neuron {
             .map(|(input, weight)| input * weight)
             .sum::<f32>();
 
-        return activation_function.apply(self.bias + output);
+        activation_function.apply(self.bias + output)
     }
 
     fn new_random<R: Rng + ?Sized>(input_size: usize, rng: &mut R) -> Self {
