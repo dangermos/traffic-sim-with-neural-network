@@ -186,10 +186,7 @@ impl PbtSummary {
 
     /// Print formatted summary
     pub fn print(&self) {
-        println!("\n============================================================");
-        println!("              PBT HYPERPARAMETER SUMMARY");
-        println!("============================================================\n");
-
+        println!("\nPBT Hyperparameter Summary");
         println!(
             "Training: {} generations across {} islands\n",
             self.total_generations, self.num_islands
@@ -224,8 +221,6 @@ impl PbtSummary {
 
         println!("Best Performing Island:");
         println!("  Island ID:         {}", self.best_island_id);
-        println!("  Final Fitness:     {:.4}", self.best_island_fitness);
-
-        println!("\n============================================================\n");
+        println!("  Final Fitness:     {:.4}\n", self.best_island_fitness);
     }
 }

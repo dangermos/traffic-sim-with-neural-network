@@ -41,9 +41,7 @@ except ImportError:
     print("Note: Install plotly for interactive HTML graphs (pip install plotly)")
 
 
-# =============================================================================
-# DATA LOADING
-# =============================================================================
+
 
 
 def load_csv(path: Path) -> Optional[pd.DataFrame]:
@@ -53,9 +51,7 @@ def load_csv(path: Path) -> Optional[pd.DataFrame]:
     return None
 
 
-# =============================================================================
-# EVOLUTION METRICS - STATIC PLOTS
-# =============================================================================
+
 
 
 def plot_evolution_dashboard(df: pd.DataFrame, output_path: Path) -> None:
@@ -217,7 +213,6 @@ def plot_evolution_dashboard(df: pd.DataFrame, output_path: Path) -> None:
 
     summary = f"""
     Summary
-    ═══════════════════════
 
     Generations: {int(final.generation)}
 
@@ -361,9 +356,7 @@ def plot_evolution_3d_diversity(df: pd.DataFrame, output_path: Path) -> None:
     print(f"  Saved: {output_path}")
 
 
-# =============================================================================
-# PBT METRICS - STATIC PLOTS
-# =============================================================================
+
 
 
 def plot_pbt_dashboard(df: pd.DataFrame, output_path: Path) -> None:
@@ -470,7 +463,6 @@ def plot_pbt_dashboard(df: pd.DataFrame, output_path: Path) -> None:
 
     summary = f"""
     PBT Summary
-    ═══════════════════════════
 
     Generations: {total_gens}
     Islands: {num_islands}
@@ -583,9 +575,7 @@ def plot_pbt_3d_trajectories(df: pd.DataFrame, output_path: Path) -> None:
     print(f"  Saved: {output_path}")
 
 
-# =============================================================================
-# INTERACTIVE PLOTS (PLOTLY)
-# =============================================================================
+
 
 
 def plot_evolution_interactive(df: pd.DataFrame, output_path: Path) -> None:
@@ -828,16 +818,12 @@ def plot_pbt_interactive(df: pd.DataFrame, output_path: Path) -> None:
     print(f"  Saved: {output_path}")
 
 
-# =============================================================================
-# MAIN
-# =============================================================================
+
 
 
 def print_summary(df: pd.DataFrame, title: str) -> None:
     """Print text summary."""
-    print(f"\n{'=' * 50}")
-    print(f"  {title}")
-    print("=" * 50)
+    print(f"\n{title}")
 
     if "best_fitness" in df.columns and "generation" in df.columns:
         print(f"\nGenerations: {int(df['generation'].max()) + 1}")
@@ -907,9 +893,6 @@ def main():
         print("  (PBT metrics are only generated when pbt_enabled=true)")
 
     # Final summary
-    print("\n" + "=" * 50)
-    print("  OUTPUT FILES")
-    print("=" * 50)
     print(f"\nAll graphs saved to: {output_dir}/")
     print("\nStatic PNG files:")
     for f in sorted(output_dir.glob("*.png")):
@@ -917,7 +900,7 @@ def main():
     print("\nInteractive HTML files (open in browser):")
     for f in sorted(output_dir.glob("*.html")):
         print(f"  - {f.name}")
-    print("\n✅ Visualization complete!")
+    print("\nDone.")
 
 
 if __name__ == "__main__":

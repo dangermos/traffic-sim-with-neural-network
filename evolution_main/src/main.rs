@@ -1,8 +1,8 @@
 use ::rand::{Rng, SeedableRng};
 use bincode::{deserialize_from, serialize};
 use genetics::{
-    Individual, NetworkTopology, Population, create_random_population, evolve_generation, fitness,
-    make_sim_from_slice_with_topology,
+    FitnessConfig, Individual, NetworkTopology, Population, create_random_population,
+    evolve_generation, fitness_with_config, make_sim_from_slice_with_topology,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use rand_chacha::ChaCha8Rng;
@@ -15,7 +15,7 @@ use traffic::levels::{
     nightmare_track, nightmare_track_extreme, overnight_training, test_sensors,
 };
 use traffic::road::RoadGrid;
-use traffic::simulation::Simulation;
+use traffic::simulation::{SimConfig, Simulation};
 
 mod metrics;
 mod pbt_metrics;
@@ -157,6 +157,13 @@ struct TrainingConfig {
     level: TrainingLevel,
     // Neural network topology
     network_topology: NetworkTopology,
+    // Simulation feature toggles (for testing/benchmarking)
+    enable_collisions: bool,
+    enable_occlusion: bool,
+    // Population size override (0 = use level default)
+    population_size: usize,
+    // Fitness function parameters
+    fitness_config: FitnessConfig,
 }
 
 impl Default for TrainingConfig {
@@ -185,6 +192,13 @@ impl Default for TrainingConfig {
             level: TrainingLevel::Overnight,
             // Default network topology: 5 inputs, 8 hidden, 2 outputs
             network_topology: NetworkTopology::default(),
+            // Simulation features enabled by default
+            enable_collisions: true,
+            enable_occlusion: true,
+            // 0 means use level default
+            population_size: 0,
+            // Default fitness parameters
+            fitness_config: FitnessConfig::default(),
         }
     }
 }
@@ -299,6 +313,43 @@ impl TrainingConfig {
                         );
                     }
                 }
+                "enable_collisions" | "collisions" => {
+                    apply_bool(&mut config.enable_collisions, value, line_no, "enable_collisions")
+                }
+                "enable_occlusion" | "occlusion" => {
+                    apply_bool(&mut config.enable_occlusion, value, line_no, "enable_occlusion")
+                }
+                "population_size" | "pop_size" | "population" => {
+                    apply_usize(&mut config.population_size, value, line_no, "population_size")
+                }
+                // Fitness function parameters
+                "fitness_destination_bonus" | "destination_bonus" => {
+                    apply_f32(&mut config.fitness_config.destination_bonus, value, line_no, "destination_bonus")
+                }
+                "fitness_speed_bonus_max" | "speed_bonus_max" => {
+                    apply_f32(&mut config.fitness_config.speed_bonus_max, value, line_no, "speed_bonus_max")
+                }
+                "fitness_proximity_reward" | "proximity_reward" => {
+                    apply_f32(&mut config.fitness_config.proximity_reward_max, value, line_no, "proximity_reward")
+                }
+                "fitness_road_adherence" | "road_adherence_reward" => {
+                    apply_f32(&mut config.fitness_config.road_adherence_reward, value, line_no, "road_adherence_reward")
+                }
+                "fitness_off_road_penalty" | "off_road_penalty" => {
+                    apply_f32(&mut config.fitness_config.off_road_penalty, value, line_no, "off_road_penalty")
+                }
+                "fitness_crash_penalty_mult" | "crash_penalty_mult" => {
+                    apply_f32(&mut config.fitness_config.crash_penalty_mult, value, line_no, "crash_penalty_mult")
+                }
+                "fitness_stagnant_penalty" | "stagnant_penalty" => {
+                    apply_f32(&mut config.fitness_config.stagnant_penalty, value, line_no, "stagnant_penalty")
+                }
+                "fitness_idle_penalty" | "idle_penalty" => {
+                    apply_f32(&mut config.fitness_config.idle_penalty, value, line_no, "idle_penalty")
+                }
+                "fitness_expected_completion_time" | "expected_completion_time" => {
+                    apply_f32(&mut config.fitness_config.expected_completion_time, value, line_no, "expected_completion_time")
+                }
                 _ => eprintln!("Unknown config key '{}' at line {}", key, line_no),
             }
         }
@@ -409,6 +460,8 @@ impl Island {
         topology: &NetworkTopology,
         max_frames: usize,
         elitism: usize,
+        sim_config: SimConfig,
+        fitness_config: &FitnessConfig,
     ) -> Vec<traffic::cars::Car> {
         // Create simulation for this island's population
         let mut sim = make_sim_from_slice_with_topology(
@@ -418,19 +471,19 @@ impl Island {
             &mut self.rng,
         );
 
-        // Run simulation
+        // Run simulation with config (collisions/occlusion can be toggled)
         for _ in 0..max_frames {
-            sim.update(false);
+            sim.update_with_config(false, sim_config);
         }
 
-        // Evaluate fitness
+        // Evaluate fitness using configured parameters
         self
             .population
             .individuals
             .par_iter_mut()
             .zip(sim.cars.cars.par_iter())
             .for_each(|(ind, car)| {
-                ind.fitness = fitness(car);
+                ind.fitness = fitness_with_config(car, fitness_config);
             });
         // Update cached best fitness for PBT ranking
         self.recent_best_fitness = self.best_fitness();
@@ -569,10 +622,15 @@ fn main() {
 
     let mut rng = ChaCha8Rng::seed_from_u64(config.rng_seed);
 
-    // Create initial simulation to get population size and road grid
+    // Create initial simulation to get road grid (and default population size)
     let sim = config.level.build_simulation(&mut rng);
     let base_road_grid = sim.roads.clone();
-    let total_pop_size = sim.cars.cars.len();
+    // Use config override if set, otherwise use level default
+    let total_pop_size = if config.population_size > 0 {
+        config.population_size
+    } else {
+        sim.cars.cars.len()
+    };
 
     println!(
         "=== Parallel Island Evolution ===
@@ -723,9 +781,9 @@ PBT Interval:     {} generations
     let pb = ProgressBar::new(config.epochs as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/black}] {pos}/{len} ({eta_precise}) {msg}")
             .unwrap()
-            .progress_chars("#>-"),
+            .progress_chars(">_|"),
     );
 
     // Metrics writer
@@ -743,25 +801,25 @@ PBT Interval:     {} generations
     let max_frames = config.max_frames;
     let elitism_per_island = (config.elitism / num_islands).max(1);
     let topology = &config.network_topology;
+    let sim_config = SimConfig {
+        enable_collisions: config.enable_collisions,
+        enable_occlusion: config.enable_occlusion,
+    };
+    let fitness_config = &config.fitness_config;
 
     for generation in 0..config.epochs {
-        // ========================================
-        // PARALLEL EVOLUTION: Run all islands concurrently
-        // Each island uses its own hyperparameters (for PBT)
-        // ========================================
+        // Run all islands concurrently
         let road_grid_ref = &base_road_grid;
 
         // Collect cars from each island's simulation for metrics
         let island_cars: Vec<Vec<traffic::cars::Car>> = islands
             .par_iter_mut()
             .map(|island| {
-                island.run_generation(road_grid_ref, topology, max_frames, elitism_per_island)
+                island.run_generation(road_grid_ref, topology, max_frames, elitism_per_island, sim_config, fitness_config)
             })
             .collect();
 
-        // ========================================
-        // MIGRATION: Exchange top individuals between islands
-        // ========================================
+        // Migration between islands
         if config.migration_interval > 0
             && generation % config.migration_interval == 0
             && generation > 0
@@ -769,9 +827,7 @@ PBT Interval:     {} generations
             migrate_between_islands(&mut islands, config.migration_count);
         }
 
-        // ========================================
-        // PBT: Exploit/Explore hyperparameters
-        // ========================================
+        // PBT exploit/explore
         if config.pbt_enabled
             && config.pbt_interval > 0
             && generation % config.pbt_interval == 0
@@ -780,9 +836,7 @@ PBT Interval:     {} generations
             pbt_exploit_explore(&mut islands, &mut rng);
         }
 
-        // ========================================
-        // PBT METRICS: Log hyperparameters for each island
-        // ========================================
+        // Log PBT metrics
         if let Some(ref mut writer) = pbt_metrics_writer {
             let snapshots: Vec<IslandHyperParamSnapshot> = islands
                 .iter()
@@ -830,9 +884,7 @@ PBT Interval:     {} generations
             }
         }
 
-        // ========================================
-        // COLLECT METRICS: Gather stats from all islands
-        // ========================================
+        // Collect metrics from all islands
         let island_best: Vec<f32> = islands.iter().map(|i| i.best_fitness()).collect();
         let island_mean: Vec<f32> = islands.iter().map(|i| i.mean_fitness()).collect();
 
@@ -904,10 +956,10 @@ PBT Interval:     {} generations
     let bytes = serialize(&final_individuals).expect("Could not serialize");
     std::fs::write(&checkpoint_path, &bytes).expect("Could not write checkpoint");
     println!(
-        "\nWrote {} individuals to {:?} ({} bytes)",
+        "\nWrote {} individuals to {:?} ({} mB)",
         final_individuals.len(),
         checkpoint_path,
-        bytes.len()
+        bytes.len() / (1024 * 1024)
     );
 
     best_history.push(global_best_fitness);

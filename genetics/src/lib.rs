@@ -115,7 +115,7 @@ impl NetworkTopology {
     /// Display format for logging
     pub fn display(&self) -> String {
         let parts: Vec<String> = self.layers.iter().map(|x| x.to_string()).collect();
-        format!("[{}] ({} genes)", parts.join(" → "), self.gene_count())
+        format!("[{}] ({} genes)", parts.join(" -> "), self.gene_count())
     }
 }
 
@@ -150,27 +150,51 @@ The loop for neuroevolution is
 // - Reaching FAST gives massive bonus (up to 150 extra points)
 // - This creates selection pressure even after cars learn to complete
 
-// Base rewards (low - just for being active)
-const BASE_MOVEMENT_REWARD: f32 = 5.0;
+/// Configuration for fitness function parameters.
+/// Allows tuning selection pressure without recompiling.
+#[derive(Debug, Clone, Copy)]
+pub struct FitnessConfig {
+    /// Base reward for being active (default: 5.0)
+    pub base_movement_reward: f32,
+    /// Bonus for reaching goal (default: 100.0)
+    pub destination_bonus: f32,
+    /// Additional bonus for reaching fast (default: 150.0)
+    pub speed_bonus_max: f32,
+    /// Reward for ending close to goal (default: 50.0)
+    pub proximity_reward_max: f32,
+    /// Reward for staying on road (default: 30.0)
+    pub road_adherence_reward: f32,
+    /// Reward for moving while on road (default: 20.0)
+    pub active_driving_reward: f32,
+    /// Penalty for going off road (default: 50.0)
+    pub off_road_penalty: f32,
+    /// Multiplicative penalty for crashing - keeps this fraction (default: 0.2)
+    pub crash_penalty_mult: f32,
+    /// Penalty for stagnating/stopping (default: 40.0)
+    pub stagnant_penalty: f32,
+    /// Penalty for not moving at all (default: 20.0)
+    pub idle_penalty: f32,
+    /// Expected completion time for speed bonus calculation (default: 1500.0)
+    pub expected_completion_time: f32,
+}
 
-// Goal completion rewards
-const DESTINATION_BONUS: f32 = 100.0; // Base bonus for reaching goal
-const SPEED_BONUS_MAX: f32 = 150.0; // ADDITIONAL bonus for reaching fast
-const PROXIMITY_REWARD_MAX: f32 = 50.0; // Reward for ending close to goal
-
-// Road-following rewards (foundation for learning)
-const ROAD_ADHERENCE_REWARD: f32 = 30.0; // Staying on road
-const ACTIVE_DRIVING_REWARD: f32 = 20.0; // Moving while on road
-
-// Penalties
-const OFF_ROAD_PENALTY: f32 = 50.0; // Going off road
-const CRASH_PENALTY_MULT: f32 = 0.2; // Multiplicative - keeps only 20%
-const STAGNANT_PENALTY: f32 = 40.0; // Giving up / stopping
-const IDLE_PENALTY: f32 = 20.0; // Not moving at all
-
-// Reference time for speed bonus calculation
-// With max_frames=3000, expect good runs to complete around 1500 frames
-const EXPECTED_COMPLETION_TIME: f32 = 1500.0;
+impl Default for FitnessConfig {
+    fn default() -> Self {
+        Self {
+            base_movement_reward: 5.0,
+            destination_bonus: 100.0,
+            speed_bonus_max: 150.0,
+            proximity_reward_max: 50.0,
+            road_adherence_reward: 30.0,
+            active_driving_reward: 20.0,
+            off_road_penalty: 50.0,
+            crash_penalty_mult: 0.2,
+            stagnant_penalty: 40.0,
+            idle_penalty: 20.0,
+            expected_completion_time: 1500.0,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Population {
@@ -195,20 +219,20 @@ pub struct Individual {
 ///
 /// This ensures there's always room to improve even after learning to complete!
 pub fn fitness(car: &Car) -> f32 {
-    // ============================================
-    // IMMEDIATE FAILURES
-    // ============================================
+    fitness_with_config(car, &FitnessConfig::default())
+}
 
+/// Fitness function with configurable parameters.
+/// Use this to experiment with different selection pressures.
+pub fn fitness_with_config(car: &Car, cfg: &FitnessConfig) -> f32 {
+    // Immediate failures
     if car.distance_traveled < 5.0 {
-        return -IDLE_PENALTY + car.distance_traveled * 0.5;
+        return -cfg.idle_penalty + car.distance_traveled * 0.5;
     }
 
-    let mut f = BASE_MOVEMENT_REWARD;
+    let mut f = cfg.base_movement_reward;
 
-    // ============================================
-    // ROAD-FOLLOWING REWARDS (foundation)
-    // ============================================
-
+    // Road-following rewards
     let on_road_ratio = if car.time_spent_alive > 0.0 {
         1.0 - (car.time_spent_off_road / car.time_spent_alive).clamp(0.0, 1.0)
     } else {
@@ -216,35 +240,25 @@ pub fn fitness(car: &Car) -> f32 {
     };
 
     // Road adherence
-    f += on_road_ratio * ROAD_ADHERENCE_REWARD;
+    f += on_road_ratio * cfg.road_adherence_reward;
 
     // Active driving: reward distance traveled while on road
     let distance_score = (car.distance_traveled / 1000.0).clamp(0.0, 1.0);
-    f += distance_score * on_road_ratio * ACTIVE_DRIVING_REWARD;
+    f += distance_score * on_road_ratio * cfg.active_driving_reward;
 
-    // ============================================
-    // GOAL COMPLETION REWARDS (main objective)
-    // This is where the skill ceiling comes from!
-    // ============================================
-
+    // Goal completion rewards
     let reached_goal = matches!(car.state(), CarState::ReachedDestination);
 
     if reached_goal {
-        // BASE: You reached the goal!
-        f += DESTINATION_BONUS;
+        f += cfg.destination_bonus;
 
-        // SPEED BONUS: The faster you reach, the more points!
-        // This creates MASSIVE differentiation between slow and fast completions.
-        //
-        // At EXPECTED_COMPLETION_TIME (500 frames): ~75 bonus points
-        // At half that time (250 frames): ~150 bonus points (maximum)
-        // At double that time (1000 frames): ~37 bonus points
+        // Speed bonus: faster completion = more points
         let completion_time = car.time_spent_alive.max(1.0);
-        let speed_factor = (EXPECTED_COMPLETION_TIME / completion_time).clamp(0.0, 2.0);
-        let speed_bonus = speed_factor * SPEED_BONUS_MAX * 0.5;
+        let speed_factor = (cfg.expected_completion_time / completion_time).clamp(0.0, 2.0);
+        let speed_bonus = speed_factor * cfg.speed_bonus_max * 0.5;
         f += speed_bonus;
 
-        // EFFICIENCY BONUS: Did you take a relatively direct path?
+        // Efficiency bonus for direct paths
         if car.distance_traveled > 0.0 && car.initial_distance_to_goal > 0.0 {
             let path_ratio = car.initial_distance_to_goal / car.distance_traveled;
             let efficiency_bonus = path_ratio.clamp(0.0, 0.5) * 40.0;
@@ -257,32 +271,23 @@ pub fn fitness(car: &Car) -> f32 {
             let proximity_ratio =
                 1.0 - (final_distance / car.initial_distance_to_goal).clamp(0.0, 1.0);
 
-            // Quadratic scaling: getting VERY close matters more
             let proximity_score = proximity_ratio * proximity_ratio;
-            f += proximity_score * PROXIMITY_REWARD_MAX;
+            f += proximity_score * cfg.proximity_reward_max;
         }
     }
 
-    // ============================================
-    // PENALTIES
-    // ============================================
-
-    // Off-road penalty
+    // Penalties
     if car.time_spent_alive > 0.0 {
         let off_road_ratio = (car.time_spent_off_road / car.time_spent_alive).clamp(0.0, 1.0);
-        f -= off_road_ratio * OFF_ROAD_PENALTY;
+        f -= off_road_ratio * cfg.off_road_penalty;
     }
 
-    // ============================================
-    // TERMINAL STATE PENALTIES
-    // ============================================
-
     if matches!(car.state(), CarState::Crashed) {
-        f *= CRASH_PENALTY_MULT;
+        f *= cfg.crash_penalty_mult;
     }
 
     if matches!(car.state(), CarState::Stagnant) {
-        f -= STAGNANT_PENALTY;
+        f -= cfg.stagnant_penalty;
     }
 
     f

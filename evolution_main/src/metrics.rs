@@ -302,10 +302,8 @@ impl EvolutionSummary {
 
     /// Print a formatted summary report
     pub fn print(&self) {
-        println!("\n============================================================");
-        println!("                    EVOLUTION SUMMARY");
-        println!("============================================================\n");
-
+        println!("\nEvolution Summary");
+        println!("-----------------");
         println!("Total Generations: {}\n", self.total_generations);
 
         println!("Fitness:");
@@ -329,8 +327,6 @@ impl EvolutionSummary {
 
         println!("Genetic Diversity:");
         println!("  Initial:       {:.4}", self.initial_diversity);
-        println!("  Final:         {:.4}", self.final_diversity);
-
-        println!("\n============================================================\n");
+        println!("  Final:         {:.4}\n", self.final_diversity);
     }
 }
