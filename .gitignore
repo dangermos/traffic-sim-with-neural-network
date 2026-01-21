@@ -1,1 +1,4 @@
 /target
+output/
+AGENTS.md
+best_fitness.json
