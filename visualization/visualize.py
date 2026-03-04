@@ -53,29 +53,90 @@ def load_csv(path: Path) -> Optional[pd.DataFrame]:
     return None
 
 
+def get_run_colors(df: pd.DataFrame) -> dict:
+    """Generate a color map for different run_ids."""
+    if "run_id" not in df.columns:
+        return {0: "blue"}
+
+    run_ids = sorted(df["run_id"].unique())
+    # Use a colormap that works well for multiple runs
+    cmap = plt.cm.get_cmap("tab10" if len(run_ids) <= 10 else "tab20")
+    return {rid: cmap(i % 20) for i, rid in enumerate(run_ids)}
+
+
+def get_run_info(df: pd.DataFrame) -> tuple:
+    """Get run information from dataframe."""
+    if "run_id" not in df.columns:
+        return 1, [0]
+    run_ids = sorted(df["run_id"].unique())
+    return len(run_ids), run_ids
+
+
 # =============================================================================
 # EVOLUTION METRICS - STATIC PLOTS
 # =============================================================================
 
 
 def plot_evolution_dashboard(df: pd.DataFrame, output_path: Path) -> None:
-    """Generate main 2D evolution dashboard."""
+    """Generate main 2D evolution dashboard with multi-run support."""
     fig, axes = plt.subplots(2, 4, figsize=(20, 10))
-    fig.suptitle("Evolution Training Progress", fontsize=16, fontweight="bold")
 
-    # 1. Fitness over time
+    num_runs, run_ids = get_run_info(df)
+    run_colors = get_run_colors(df)
+
+    title = "Evolution Training Progress"
+    if num_runs > 1:
+        title += f" ({num_runs} runs)"
+    fig.suptitle(title, fontsize=16, fontweight="bold")
+
+    # 1. Fitness over time (with run coloring)
     ax = axes[0, 0]
-    ax.plot(df.generation, df.best_fitness, label="Best", color="green", linewidth=2)
-    ax.plot(df.generation, df.mean_fitness, label="Mean", color="blue", linewidth=1.5)
-    ax.plot(
-        df.generation, df.median_fitness, label="Median", color="orange", linestyle="--"
-    )
-    ax.fill_between(
-        df.generation, df.worst_fitness, df.best_fitness, alpha=0.15, color="blue"
-    )
+
+    if num_runs > 1:
+        # Plot each run with its own color
+        for run_id in run_ids:
+            run_df = df[df["run_id"] == run_id]
+            color = run_colors[run_id]
+            ax.plot(
+                run_df.generation,
+                run_df.best_fitness,
+                color=color,
+                linewidth=2,
+                alpha=0.8,
+            )
+            ax.plot(
+                run_df.generation,
+                run_df.mean_fitness,
+                color=color,
+                linewidth=1,
+                alpha=0.5,
+                linestyle="--",
+            )
+        # Add vertical lines at run boundaries
+        for run_id in run_ids[1:]:
+            first_gen = df[df["run_id"] == run_id]["generation"].min()
+            ax.axvline(x=first_gen, color="gray", linestyle=":", alpha=0.5)
+    else:
+        ax.plot(
+            df.generation, df.best_fitness, label="Best", color="green", linewidth=2
+        )
+        ax.plot(
+            df.generation, df.mean_fitness, label="Mean", color="blue", linewidth=1.5
+        )
+        ax.plot(
+            df.generation,
+            df.median_fitness,
+            label="Median",
+            color="orange",
+            linestyle="--",
+        )
+        ax.fill_between(
+            df.generation, df.worst_fitness, df.best_fitness, alpha=0.15, color="blue"
+        )
+        ax.legend(loc="lower right")
+
     ax.set_xlabel("Generation")
     ax.set_ylabel("Fitness")
-    ax.legend(loc="lower right")
     ax.set_title("Fitness Over Time")
     ax.grid(True, alpha=0.3)
 
@@ -104,6 +165,11 @@ def plot_evolution_dashboard(df: pd.DataFrame, output_path: Path) -> None:
         colors=["#78d28c", "#5dade2", "#e6c850", "#d25050"],
         alpha=0.8,
     )
+    # Add run boundary markers
+    if num_runs > 1:
+        for run_id in run_ids[1:]:
+            first_gen = df[df["run_id"] == run_id]["generation"].min()
+            ax.axvline(x=first_gen, color="gray", linestyle=":", alpha=0.5)
     ax.legend(loc="upper right")
     ax.set_xlabel("Generation")
     ax.set_ylabel("Number of Cars")
@@ -135,8 +201,19 @@ def plot_evolution_dashboard(df: pd.DataFrame, output_path: Path) -> None:
 
     # 5. Genetic diversity
     ax = axes[1, 0]
-    ax.plot(df.generation, df.gene_diversity, color="crimson", linewidth=1.5)
-    ax.fill_between(df.generation, 0, df.gene_diversity, alpha=0.2, color="crimson")
+    if num_runs > 1:
+        for run_id in run_ids:
+            run_df = df[df["run_id"] == run_id]
+            color = run_colors[run_id]
+            ax.plot(
+                run_df.generation, run_df.gene_diversity, color=color, linewidth=1.5
+            )
+        for run_id in run_ids[1:]:
+            first_gen = df[df["run_id"] == run_id]["generation"].min()
+            ax.axvline(x=first_gen, color="gray", linestyle=":", alpha=0.5)
+    else:
+        ax.plot(df.generation, df.gene_diversity, color="crimson", linewidth=1.5)
+        ax.fill_between(df.generation, 0, df.gene_diversity, alpha=0.2, color="crimson")
     ax.set_xlabel("Generation")
     ax.set_ylabel("Diversity")
     ax.set_title("Genetic Diversity")
@@ -215,10 +292,11 @@ def plot_evolution_dashboard(df: pd.DataFrame, output_path: Path) -> None:
             (final.best_fitness - initial.best_fitness) / abs(initial.best_fitness)
         ) * 100
 
+    runs_text = f"\n    Runs: {num_runs}" if num_runs > 1 else ""
     summary = f"""
     Summary
     ═══════════════════════
-
+{runs_text}
     Generations: {int(final.generation)}
 
     Initial Best: {initial.best_fitness:.2f}
@@ -253,18 +331,44 @@ def plot_evolution_dashboard(df: pd.DataFrame, output_path: Path) -> None:
 
 
 def plot_evolution_3d_fitness(df: pd.DataFrame, output_path: Path) -> None:
-    """3D: Generation × Mean Fitness × Best Fitness"""
+    """3D: Generation × Mean Fitness × Best Fitness with run coloring"""
     fig = plt.figure(figsize=(12, 9))
     ax = fig.add_subplot(111, projection="3d")
 
+    num_runs, run_ids = get_run_info(df)
+    run_colors = get_run_colors(df)
+
+    if num_runs > 1:
+        # Plot each run with its own color
+        for run_id in run_ids:
+            run_df = df[df["run_id"] == run_id]
+            gen = run_df["generation"].values
+            mean_fit = run_df["mean_fitness"].values
+            best_fit = run_df["best_fitness"].values
+            color = run_colors[run_id]
+
+            ax.plot(gen, mean_fit, best_fit, color=color, linewidth=2, alpha=0.7)
+            ax.scatter(
+                gen,
+                mean_fit,
+                best_fit,
+                color=color,
+                s=30,
+                alpha=0.6,
+                label=f"Run {run_id}",
+            )
+    else:
+        gen = df["generation"].values
+        mean_fit = df["mean_fitness"].values
+        best_fit = df["best_fitness"].values
+
+        ax.plot(gen, mean_fit, best_fit, color="blue", linewidth=2, alpha=0.7)
+        scatter = ax.scatter(gen, mean_fit, best_fit, c=gen, cmap="viridis", s=50, alpha=0.8)
+
+    # Use full dataframe for markers
     gen = df["generation"].values
     mean_fit = df["mean_fitness"].values
     best_fit = df["best_fitness"].values
-
-    ax.plot(gen, mean_fit, best_fit, color="blue", linewidth=2, alpha=0.7)
-    scatter = ax.scatter(
-        gen, mean_fit, best_fit, c=gen, cmap="viridis", s=50, alpha=0.8
-    )
 
     # Mark key points
     ax.scatter(
@@ -300,7 +404,8 @@ def plot_evolution_3d_fitness(df: pd.DataFrame, output_path: Path) -> None:
     ax.set_ylabel("Mean Fitness")
     ax.set_zlabel("Best Fitness")
     ax.set_title("3D Fitness Landscape")
-    plt.colorbar(scatter, ax=ax, label="Generation", shrink=0.6)
+    if num_runs == 1:
+        plt.colorbar(scatter, ax=ax, label="Generation", shrink=0.6)
     ax.legend()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()

@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
 use traffic::cars::{Car, CarState};
@@ -9,6 +9,7 @@ use genetics::Population;
 /// Metrics collected for each generation during evolution.
 #[derive(Debug, Clone)]
 pub struct GenerationMetrics {
+    pub run_id: u32,
     pub generation: u32,
 
     // Fitness distribution
@@ -45,7 +46,7 @@ pub struct GenerationMetrics {
 
 impl GenerationMetrics {
     /// Compute metrics from the current population and simulation state.
-    pub fn compute(generation: u32, population: &Population, cars: &[Car]) -> Self {
+    pub fn compute(run_id: u32, generation: u32, population: &Population, cars: &[Car]) -> Self {
         let n = cars.len().max(1) as f32;
 
         // Fitness metrics
@@ -116,28 +117,29 @@ impl GenerationMetrics {
         let max_speed = speeds.iter().cloned().fold(0.0f32, f32::max);
 
         // Genetic diversity: average standard deviation across all gene positions
-        let gene_diversity = if !population.individuals.is_empty()
-            && !population.individuals[0].genes.is_empty()
-        {
-            let gene_len = population.individuals[0].genes.len();
-            let total_std_dev: f32 = (0..gene_len)
-                .map(|i| {
-                    let vals: Vec<f32> = population
-                        .individuals
-                        .iter()
-                        .map(|ind| ind.genes.get(i).copied().unwrap_or(0.0))
-                        .collect();
-                    let m = vals.iter().sum::<f32>() / vals.len().max(1) as f32;
-                    let var = vals.iter().map(|v| (v - m).powi(2)).sum::<f32>() / vals.len().max(1) as f32;
-                    var.sqrt()
-                })
-                .sum();
-            total_std_dev / gene_len as f32
-        } else {
-            0.0
-        };
+        let gene_diversity =
+            if !population.individuals.is_empty() && !population.individuals[0].genes.is_empty() {
+                let gene_len = population.individuals[0].genes.len();
+                let total_std_dev: f32 = (0..gene_len)
+                    .map(|i| {
+                        let vals: Vec<f32> = population
+                            .individuals
+                            .iter()
+                            .map(|ind| ind.genes.get(i).copied().unwrap_or(0.0))
+                            .collect();
+                        let m = vals.iter().sum::<f32>() / vals.len().max(1) as f32;
+                        let var = vals.iter().map(|v| (v - m).powi(2)).sum::<f32>()
+                            / vals.len().max(1) as f32;
+                        var.sqrt()
+                    })
+                    .sum();
+                total_std_dev / gene_len as f32
+            } else {
+                0.0
+            };
 
         Self {
+            run_id,
             generation,
             best_fitness,
             mean_fitness,
@@ -164,7 +166,8 @@ impl GenerationMetrics {
     /// Convert metrics to a CSV row string.
     pub fn to_csv_row(&self) -> String {
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            self.run_id,
             self.generation,
             self.best_fitness,
             self.mean_fitness,
@@ -190,16 +193,117 @@ impl GenerationMetrics {
 }
 
 /// CSV header for metrics file.
-pub const CSV_HEADER: &str = "generation,best_fitness,mean_fitness,median_fitness,worst_fitness,fitness_std_dev,max_distance,mean_distance,max_progress,mean_progress,num_crashed,num_reached,num_stagnant,num_active,mean_time_alive,mean_efficiency,best_efficiency,gene_diversity,mean_speed,max_speed\n";
+pub const CSV_HEADER: &str = "run_id,generation,best_fitness,mean_fitness,median_fitness,worst_fitness,fitness_std_dev,max_distance,mean_distance,max_progress,mean_progress,num_crashed,num_reached,num_stagnant,num_active,mean_time_alive,mean_efficiency,best_efficiency,gene_diversity,mean_speed,max_speed\n";
+
+/// Information about existing metrics data for cumulative tracking
+#[derive(Debug, Clone, Default)]
+pub struct MetricsState {
+    /// The run_id to use for this run (max existing + 1, or 0 if new file)
+    pub run_id: u32,
+    /// The generation offset (cumulative generations from all previous runs)
+    pub generation_offset: u32,
+    /// Total rows in existing file
+    pub existing_rows: u32,
+}
+
+impl MetricsState {
+    /// Parse existing metrics file to determine run_id and generation offset
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
+        let path = path.as_ref();
+
+        if !path.exists() {
+            return Self::default();
+        }
+
+        let file = match File::open(path) {
+            Ok(f) => f,
+            Err(_) => return Self::default(),
+        };
+
+        let reader = BufReader::new(file);
+        let mut max_run_id: u32 = 0;
+        let mut max_generation: u32 = 0;
+        let mut row_count: u32 = 0;
+
+        for (line_idx, line_result) in reader.lines().enumerate() {
+            // Skip header
+            if line_idx == 0 {
+                continue;
+            }
+
+            let line = match line_result {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() < 2 {
+                continue;
+            }
+
+            if let (Ok(run_id), Ok(generation)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+            {
+                max_run_id = max_run_id.max(run_id);
+                max_generation = max_generation.max(generation);
+                row_count += 1;
+            }
+        }
+
+        if row_count == 0 {
+            Self::default()
+        } else {
+            Self {
+                run_id: max_run_id + 1,
+                generation_offset: max_generation + 1,
+                existing_rows: row_count,
+            }
+        }
+    }
+}
 
 /// Writer for streaming metrics to a CSV file.
+/// Supports cumulative mode where metrics are appended across runs.
 pub struct MetricsWriter {
     writer: BufWriter<File>,
+    state: MetricsState,
 }
 
 impl MetricsWriter {
-    /// Create a new metrics writer, writing the CSV header.
+    /// Create a new metrics writer in cumulative mode.
+    /// If the file exists, appends to it and continues run_id/generation numbering.
+    /// If the file doesn't exist or is empty, starts fresh with header.
     pub fn new<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let path = path.as_ref();
+        let state = MetricsState::from_file(path);
+
+        let file = if state.existing_rows > 0 {
+            // Append mode - file exists with data
+            OpenOptions::new().append(true).open(path)?
+        } else {
+            // Create/truncate mode - new file or empty file
+            let f = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(path)?;
+
+            let mut writer = BufWriter::new(f);
+            writer.write_all(CSV_HEADER.as_bytes())?;
+            writer.flush()?;
+
+            return Ok(Self {
+                writer,
+                state: MetricsState::default(),
+            });
+        };
+
+        let writer = BufWriter::new(file);
+
+        Ok(Self { writer, state })
+    }
+
+    /// Create a new metrics writer that always starts fresh (truncates existing file).
+    pub fn new_fresh<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         let file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -210,7 +314,20 @@ impl MetricsWriter {
         writer.write_all(CSV_HEADER.as_bytes())?;
         writer.flush()?;
 
-        Ok(Self { writer })
+        Ok(Self {
+            writer,
+            state: MetricsState::default(),
+        })
+    }
+
+    /// Get the current run_id for this session
+    pub fn run_id(&self) -> u32 {
+        self.state.run_id
+    }
+
+    /// Get the generation offset (add this to local generation number)
+    pub fn generation_offset(&self) -> u32 {
+        self.state.generation_offset
     }
 
     /// Append a metrics row to the CSV file.
@@ -219,6 +336,23 @@ impl MetricsWriter {
         // Flush periodically so we don't lose data on crash
         self.writer.flush()?;
         Ok(())
+    }
+
+    /// Get a summary of the cumulative state
+    pub fn print_cumulative_info(&self) {
+        if self.state.existing_rows > 0 {
+            println!(
+                "  Continuing from previous runs: {} existing rows",
+                self.state.existing_rows
+            );
+            println!("  This is run #{}", self.state.run_id);
+            println!(
+                "  Generation numbering starts at {}",
+                self.state.generation_offset
+            );
+        } else {
+            println!("  Starting fresh metrics file (run #0)");
+        }
     }
 }
 
@@ -280,7 +414,9 @@ impl EvolutionSummary {
             .map(|m| m.best_efficiency)
             .fold(0.0f32, f32::max);
 
-        let total_cars = (last.num_crashed + last.num_reached_destination + last.num_stagnant + last.num_active).max(1) as f32;
+        let total_cars =
+            (last.num_crashed + last.num_reached_destination + last.num_stagnant + last.num_active)
+                .max(1) as f32;
 
         Some(Self {
             total_generations: metrics.len() as u32,

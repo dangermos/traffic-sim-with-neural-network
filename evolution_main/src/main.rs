@@ -424,8 +424,7 @@ impl Island {
         }
 
         // Evaluate fitness
-        self
-            .population
+        self.population
             .individuals
             .par_iter_mut()
             .zip(sim.cars.cars.par_iter())
@@ -728,9 +727,15 @@ PBT Interval:     {} generations
             .progress_chars("#>-"),
     );
 
-    // Metrics writer
-    let mut metrics_writer =
-        MetricsWriter::new(&metrics_path).expect("Failed to create metrics file");
+    // Metrics writer (cumulative across runs)
+    let metrics_writer = MetricsWriter::new(&metrics_path).expect("Failed to create metrics file");
+
+    println!("\n=== Metrics Configuration ===");
+    metrics_writer.print_cumulative_info();
+
+    let run_id = metrics_writer.run_id();
+    let generation_offset = metrics_writer.generation_offset();
+    let mut metrics_writer = metrics_writer;
 
     // PBT metrics writer (only if PBT is enabled)
     let mut pbt_metrics_writer = if config.pbt_enabled {
@@ -858,8 +863,12 @@ PBT Interval:     {} generations
         // Flatten all island cars for metrics (these are the ACTUAL simulated cars)
         let all_cars: Vec<traffic::cars::Car> = island_cars.into_iter().flatten().collect();
 
-        let metrics =
-            GenerationMetrics::compute(generation as u32, &combined_population, &all_cars);
+        let metrics = GenerationMetrics::compute(
+            run_id,
+            generation_offset + generation as u32,
+            &combined_population,
+            &all_cars,
+        );
 
         if let Err(e) = metrics_writer.write_metrics(&metrics) {
             eprintln!("Failed to write metrics: {e}");
