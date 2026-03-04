@@ -4,7 +4,7 @@ use std::{cmp::Ordering, vec};
 
 use crate::{
     road::{RoadGrid, RoadId},
-    simulation::CarObs,
+    simulation::{CarObs, SimConfig},
 };
 use macroquad::prelude::*;
 use neural::{LayerTopology, Network};
@@ -330,30 +330,48 @@ impl Car {
         }
     }
 
+    /// Update with default config (collisions and occlusion enabled)
     pub fn update<'a>(&'a mut self, road_grid: &'a RoadGrid, objects: &[CarObs], debug: bool) {
+        self.update_with_config(road_grid, objects, debug, SimConfig::default());
+    }
+
+    /// Update with custom config for toggling collisions/occlusion
+    pub fn update_with_config<'a>(
+        &'a mut self,
+        road_grid: &'a RoadGrid,
+        objects: &[CarObs],
+        debug: bool,
+        config: SimConfig,
+    ) {
         let prev_distance = self.distance_to_destination;
         let prev_pos = self.position;
 
-        for object in objects {
-            // Skip self
-            if self.car_id == object.id {
-                continue;
-            }
-            // Skip crashed or finished cars - they shouldn't cause new collisions
-            if object.crashed {
-                continue;
-            }
+        // Collision detection (can be disabled via config)
+        if config.enable_collisions {
+            for object in objects {
+                // Skip self
+                if self.car_id == object.id {
+                    continue;
+                }
+                // Skip crashed or finished cars - they shouldn't cause new collisions
+                if object.crashed {
+                    continue;
+                }
 
-            if arrived(&self.position, &object.pos, 10.0) {
-                self.change_state(CarState::Crashed);
-                // Potential Idea: Maybe make notification handlers to keep stdout clean.
-                // A struct that only reacts to the first occurence of some signal sent by a crash would probably suffice.
+                if arrived(&self.position, &object.pos, 10.0) {
+                    self.change_state(CarState::Crashed);
+                }
             }
         }
 
-        // Obstruction handling
-        self.calculate_obstruction_rays();
-        self.obstruction_score = self.get_obstruction_score(objects);
+        // Obstruction handling (can be disabled via config)
+        if config.enable_occlusion {
+            self.calculate_obstruction_rays();
+            self.obstruction_score = self.get_obstruction_score(objects);
+        } else {
+            // When occlusion is disabled, report "no obstructions"
+            self.obstruction_score = 0.0;
+        }
 
         // On-Road Score
         self.on_roadness = on_roadness(self, road_grid);
@@ -517,7 +535,6 @@ impl Car {
             }
 
             CarState::UserControlled(destination) => {
-                //let max_speed = 20.0;
                 let eps = 20.0;
 
                 let to_target = destination.position - self.position;
@@ -582,8 +599,6 @@ impl Car {
         let dir = Vec2::from_angle(self.rotation);
 
         self.position += dir * self.speed * dt;
-
-        //if debug {println!("{}", self.position);}
     }
 
     fn move_car_manual(&mut self, debug: bool) {
@@ -787,8 +802,6 @@ fn on_roadness(car: &mut Car, road_grid: &RoadGrid) -> f32 {
         .unwrap();
 
     car.road_id = *assumed_road;
-
-    //println!("Assumed road is {:?} with a distance of {}", assumed_road, d);
 
     // Map distance to [0,1] where 1 = on road, 0 = far off road
     let overshoot = (d - r).max(0.0);

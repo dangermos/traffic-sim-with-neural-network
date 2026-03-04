@@ -264,20 +264,7 @@ pub fn build_level_2<T: Rng>(center: Vec2, screen: Vec2, rng: &mut T) -> Simulat
     Simulation::new(cars, road_grid)
 }
 
-/// NIGHTMARE TRACK - An absolutely brutal driving course
-///
-/// Features:
-/// - Multiple serpentine sections with varying amplitudes
-/// - Tight hairpin turns (180° switchbacks)
-/// - A double spiral section
-/// - Chicanes that require precise steering
-/// - Interweaving roads that cross at odd angles
-/// - Long winding mountain-pass style roads
-/// - A figure-8 section
-/// - Decreasing radius turns (tightening spirals)
-///
-/// This map is designed to be nearly impossible for untrained NNs
-/// and extremely challenging even for human players.
+/// High-difficulty track for stress-testing navigation.
 pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     const CARS_PER_ROAD: usize = 2; // Fewer cars to focus on navigation difficulty
 
@@ -285,10 +272,6 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     let mut roads: Vec<Road> = Vec::new();
     let mut id: usize = 0;
 
-    // ============================================
-    // SECTION 1: THE SERPENT'S PATH
-    // A series of increasingly aggressive S-curves
-    // ============================================
 
     // Gentle warm-up serpentine (west side)
     roads.push(serpentine_road(
@@ -323,10 +306,6 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     ));
     id += 1;
 
-    // ============================================
-    // SECTION 2: HAIRPIN HELL
-    // A series of switchback turns like a mountain pass
-    // ============================================
 
     // First hairpin (clockwise)
     roads.push(hairpin_road(
@@ -358,10 +337,6 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     ));
     id += 1;
 
-    // ============================================
-    // SECTION 3: THE SPIRAL OF DOOM
-    // Inward and outward spirals
-    // ============================================
 
     // Inward spiral (tightening - gets harder as you go)
     roads.push(spiral_road(
@@ -383,10 +358,6 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     ));
     id += 1;
 
-    // ============================================
-    // SECTION 4: CHICANE CHAOS
-    // Quick direction changes
-    // ============================================
 
     // Wide chicane
     roads.push(chicane_road(
@@ -429,10 +400,6 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     ));
     id += 1;
 
-    // ============================================
-    // SECTION 5: THE FIGURE-8 OF INSANITY
-    // Two loops that cross in the middle
-    // ============================================
 
     let fig8_center = vec2(950.0, 400.0);
     let fig8_radius = 120.0;
@@ -466,10 +433,6 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     roads.push(road_from_waypoints(fig8_right, RoadId(id), 8));
     id += 1;
 
-    // ============================================
-    // SECTION 6: THE CORKSCREW
-    // A complex 3D-like path (simulated in 2D)
-    // ============================================
 
     let corkscrew_start = vec2(1700.0, 400.0);
     let mut corkscrew_pts: Vec<Vec2> = Vec::new();
@@ -482,10 +445,6 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     roads.push(road_from_waypoints(corkscrew_pts, RoadId(id), 5));
     id += 1;
 
-    // ============================================
-    // SECTION 7: DECREASING RADIUS TURNS
-    // These are especially evil - you have to slow down mid-turn
-    // ============================================
 
     // Decreasing radius curve (starts wide, gets tight)
     let dec_center = vec2(600.0, 350.0);
@@ -518,10 +477,6 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     roads.push(road_from_waypoints(trap_pts, RoadId(id), 8));
     id += 1;
 
-    // ============================================
-    // SECTION 8: THE MAZE
-    // Interconnected short segments with sharp turns
-    // ============================================
 
     let maze_origin = vec2(1100.0, 800.0);
     let seg = 80.0;
@@ -570,10 +525,6 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     ));
     id += 1;
 
-    // ============================================
-    // SECTION 9: THE WHIP
-    // Long straight into sudden tight turn
-    // ============================================
 
     roads.push(road_from_waypoints(
         vec![
@@ -610,10 +561,6 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     ));
     id += 1;
 
-    // ============================================
-    // SECTION 10: RANDOM CHAOS PATHS
-    // Procedurally generated madness
-    // ============================================
 
     // Chaotic path 1
     let mut chaos1: Vec<Vec2> = Vec::new();
@@ -647,10 +594,6 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     roads.push(road_from_waypoints(chaos2, RoadId(id), 10));
     id += 1;
 
-    // ============================================
-    // SECTION 11: THE GAUNTLET (connecting roads)
-    // These roads connect different sections
-    // ============================================
 
     // Connector from serpent to hairpin
     roads.push(Road::new(
@@ -692,9 +635,6 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
         id += 1;
     }
 
-    // ============================================
-    // BUILD THE SIMULATION
-    // ============================================
 
     let road_grid = RoadGrid::new(roads);
     let road_count = road_grid.roads.len().max(1);
@@ -721,8 +661,7 @@ pub fn nightmare_track<T: Rng>(rng: &mut T) -> Simulation {
     Simulation::new(cars, road_grid)
 }
 
-/// An even more extreme version of the nightmare track
-/// with tighter turns and more chaotic patterns
+/// Extra-difficult variant of nightmare_track.
 pub fn nightmare_track_extreme<T: Rng>(rng: &mut T) -> Simulation {
     const CARS_PER_ROAD: usize = 1;
 
@@ -730,7 +669,6 @@ pub fn nightmare_track_extreme<T: Rng>(rng: &mut T) -> Simulation {
     let mut roads: Vec<Road> = Vec::new();
     let mut id: usize = 0;
 
-    // ULTRA TIGHT SPIRALS
     roads.push(spiral_road(
         vec2(200.0, 300.0),
         180.0,
@@ -749,7 +687,6 @@ pub fn nightmare_track_extreme<T: Rng>(rng: &mut T) -> Simulation {
     ));
     id += 1;
 
-    // EXTREME SERPENTINES
     roads.push(serpentine_road(
         vec2(100.0, 800.0),
         vec2(1.0, 0.0),
@@ -760,7 +697,6 @@ pub fn nightmare_track_extreme<T: Rng>(rng: &mut T) -> Simulation {
     ));
     id += 1;
 
-    // MULTIPLE CONSECUTIVE HAIRPINS (like a mountain pass)
     let hairpin_start = vec2(600.0, 100.0);
     let mut hairpin_chain: Vec<Vec2> = vec![hairpin_start];
     let mut hp_pos = hairpin_start;
@@ -797,7 +733,6 @@ pub fn nightmare_track_extreme<T: Rng>(rng: &mut T) -> Simulation {
     roads.push(road_from_waypoints(hairpin_chain, RoadId(id), 8));
     id += 1;
 
-    // THE PRETZEL - a complex self-intersecting path
     let pretzel_center = vec2(1300.0, 600.0);
     let mut pretzel: Vec<Vec2> = Vec::new();
     for i in 0..100 {
@@ -812,7 +747,6 @@ pub fn nightmare_track_extreme<T: Rng>(rng: &mut T) -> Simulation {
     roads.push(road_from_waypoints(pretzel, RoadId(id), 5));
     id += 1;
 
-    // LEMNISCATE (infinity symbol with variation)
     let lemni_center = vec2(500.0, 600.0);
     let mut lemniscate: Vec<Vec2> = Vec::new();
     for i in 0..80 {
@@ -825,7 +759,6 @@ pub fn nightmare_track_extreme<T: Rng>(rng: &mut T) -> Simulation {
     roads.push(road_from_waypoints(lemniscate, RoadId(id), 8));
     id += 1;
 
-    // ZIGZAG LIGHTNING BOLT
     let mut zigzag: Vec<Vec2> = Vec::new();
     let zz_start = vec2(100.0, 500.0);
     for i in 0..20 {
@@ -841,7 +774,6 @@ pub fn nightmare_track_extreme<T: Rng>(rng: &mut T) -> Simulation {
     roads.push(road_from_waypoints(zigzag, RoadId(id), 15));
     id += 1;
 
-    // CONNECTION ROADS (need at least some way to traverse the map)
     roads.push(Road::new(
         vec2(100.0, 100.0),
         vec2(1800.0, 100.0),
@@ -966,7 +898,6 @@ pub fn test_sensors<T: Rng>(_center: Vec2, _screen: Vec2, rng: &mut T) -> Simula
     const NUM_CARS: usize = 100;
 
     let road_grid = generate_road_grid(NUM_ROADS, rng);
-    //let road_grid = RoadGrid::new(roads);
 
     let topology = [
         LayerTopology { neurons: 5 },
@@ -988,15 +919,9 @@ pub fn test_sensors<T: Rng>(_center: Vec2, _screen: Vec2, rng: &mut T) -> Simula
     Simulation::new(cars, road_grid)
 }
 
-/// A comprehensive training level for overnight evolution runs.
-///
-/// Features:
-/// - Large interconnected grid with varied path lengths
-/// - Multiple difficulty zones (easy straight sections + complex intersections)
-/// - Enough cars to create interesting collision avoidance scenarios
-/// - Roads of varying lengths to test both short and long navigation
+/// Large grid level intended for long training runs.
 pub fn overnight_training<T: Rng>(rng: &mut T) -> Simulation {
-    const CARS_PER_ROAD: usize = 4;
+    const CARS_PER_ROAD: usize = 20;
 
     // Build a proper city grid with intersections
     let city_center = vec2(960.0, 540.0);

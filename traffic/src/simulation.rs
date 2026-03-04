@@ -13,6 +13,25 @@ use macroquad::{
 };
 use rayon::prelude::*;
 
+/// Configuration for simulation behavior.
+/// Use this to toggle expensive features for testing/benchmarking.
+#[derive(Clone, Copy, Debug)]
+pub struct SimConfig {
+    /// Enable collision detection between cars
+    pub enable_collisions: bool,
+    /// Enable obstruction ray calculations (car "vision")
+    pub enable_occlusion: bool,
+}
+
+impl Default for SimConfig {
+    fn default() -> Self {
+        Self {
+            enable_collisions: true,
+            enable_occlusion: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct CarObs {
     pub id: u16,
@@ -240,7 +259,13 @@ impl Simulation {
         }
     }
 
+    /// Update with default config (collisions and occlusion enabled)
     pub fn update(&mut self, debug: bool) {
+        self.update_with_config(debug, SimConfig::default());
+    }
+
+    /// Update with custom config for toggling features
+    pub fn update_with_config(&mut self, debug: bool, config: SimConfig) {
         // Refresh observable objects with current car states before collision checks.
         self.objects.clear();
         self.objects.extend(self.cars.cars.iter().map(|car| CarObs {
@@ -264,8 +289,11 @@ impl Simulation {
             || Vec::with_capacity(32),
             |neighbors, car| {
                 neighbors.clear();
-                grid.collect_neighbors(car.position, 200.0, objects, neighbors);
-                car.update(roads, neighbors.as_slice(), debug);
+                // Only collect neighbors if we need them for collisions or occlusion
+                if config.enable_collisions || config.enable_occlusion {
+                    grid.collect_neighbors(car.position, 200.0, objects, neighbors);
+                }
+                car.update_with_config(roads, neighbors.as_slice(), debug, config);
             },
         );
 
